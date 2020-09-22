@@ -1,5 +1,8 @@
 use rusb::{Context, DeviceHandle, Result, Version, UsbContext, Direction, RequestType, Recipient, request_type};
 use std::time::Duration;
+use std::fs::File;
+use std::io::BufWriter;
+use std::io::prelude::*;
 mod io;
 
 const VENDOR_ID: u16 = 0x16C0;
@@ -41,23 +44,168 @@ fn main() {
     println!("NES_INIT");
     io_nes_init(&device_handle);
     // TEST NROM
+    test_nrom(&device_handle);
+
+    // MIRROR
+    //   detect_mapper_mirroring
+    //   ciccom
+    // READ
+    let file = File::create("gamename.nes").unwrap();
+    let mut f = BufWriter::new(file);
+
+    //   create_header
+    let mirroring = detect_mapper_mirroring(&device_handle).unwrap();
+    create_header(&mut f, 32, 8, mirroring);
+    //   dump_prgrom(file, 32, false)
+    //
+
+    //   dump_chrrom
+    // IO.RESET
+    println!("IO_RESET");
+    io_reset(&device_handle);
+}
+
+fn create_header<W: Write>(file: &mut BufWriter<W>, prg_size: u8, chr_size: u8, mirroring: Mirroring) {
+    file.write(b"NES").unwrap();
+
+    file.write_all(&[0x1A]).unwrap();
+    // byte 4
+    file.write_all(&[prg_size / 16]).unwrap();
+    // byte 5
+    file.write_all(&[chr_size / 8]).unwrap();
+
+    // byte 6
+    // NROM is mapper 0
+    let mapper = 0;
+
+    let mut temp = mapper & 0x0F;
+    temp = temp << 4;
+
+    if mirroring == Mirroring::VERT {
+        temp = temp | 0x01;
+    }
+    file.write_all(&[temp]).unwrap();
+
+    // byte 7
+    let temp = mapper & 0xF0;
+    file.write_all(&[temp]).unwrap();
+
+    // byte 8-15
+    file.write_all(&[0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+
+    file.flush().unwrap();
+}
+
+fn test_nrom<T: UsbContext>(device_handle: &DeviceHandle<T>) {
     println!("Testing NROM");
     println!("Detect mapper mirroring");
     detect_mapper_mirroring(&device_handle);
     //    IO EXP0_PULLUP_TEST
     io_exp0_pullup_test(&device_handle);
     //    read PRG-ROM manf ID
+    nes_discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0xAA);
+    nes_discrete_exp0_prgrom_wr(&device_handle, 0x2AAA, 0x55);
+    nes_discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0x90);
+
+    let rv = nes_cpu_rd(&device_handle, 0x8000);
+    println!("PRG-ROM manf ID: 0x{:x}", rv);
+
+    let rv = nes_cpu_rd(&device_handle, 0x8001);
+    println!("PRG-ROM prod ID: 0x{:x}", rv);
+
+    // Exit
+    nes_discrete_exp0_prgrom_wr(&device_handle, 0x8000, 0xF0);
+
     //    read CHR-ROM manf ID
-    // MIRROR
-    //   detect_mapper_mirroring
-    //   ciccom
-    // READ
-    //   create_header
-    //   dump_prgrom
-    //   dump_chrrom
-    // IO.RESET
-    println!("IO_RESET");
-    io_reset(&device_handle);
+    nes_ppu_wr(&device_handle, 0x1555, 0xAA);
+    nes_ppu_wr(&device_handle, 0x0AAA, 0x55);
+    nes_ppu_wr(&device_handle, 0x1555, 0x90);
+
+    let rv = nes_ppu_rd(&device_handle, 0x0000);
+    println!("CHR-ROM manf ID: 0x{:x}", rv);
+
+    let rv = nes_ppu_rd(&device_handle, 0x0001);
+    println!("CHR-ROM prod ID: 0x{:x}", rv);
+    // EXIT
+    nes_ppu_wr(&device_handle, 0x0000, 0xF0);
+}
+
+fn nes_ppu_rd<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16) -> u8 {
+    //NES_PPU_RD 0x82 RL=3
+    let value = 0x82;
+
+    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
+    let request = 3; // NES
+    let index = operand;
+    let mut buf:[u8; 3]=[0; 3]; // RL is 3
+    let timeout = Duration::from_secs(1);
+
+    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
+    let error_code = buf[RETURN_ERR_IDX];
+    println!("{} bytes read", bytes);
+    if error_code != 0 {
+        println!("GOT ERROR: {}", error_code)
+    }
+    return buf[2];
+}
+
+fn nes_ppu_wr<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16, misc: u16) {
+    // #define NES_PPU_WR 0x01
+    // wValue = misc << 8 | op_nes[opcode]
+    // wIndex = operand
+    let value: u16 = (misc << 8) | 0x01;
+
+    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
+    let request = 3; // 3 is for NES
+    let index = operand;
+    let mut buf:[u8; 1]=[0; 1]; // no Rlen so 1
+    let timeout = Duration::from_secs(1);
+
+    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
+    let error_code = buf[RETURN_ERR_IDX];
+    println!("{} bytes read", bytes);
+    if error_code != 0 {
+        println!("GOT ERROR: {}", error_code)
+    }
+}
+
+fn nes_cpu_rd<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16) -> u8 {
+    //NES_CPU_RD 0x81 RL=3
+    let value = 0x81;
+
+    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
+    let request = 3; // NES
+    let index = operand;
+    let mut buf:[u8; 3]=[0; 3]; // RL is 3
+    let timeout = Duration::from_secs(1);
+
+    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
+    let error_code = buf[RETURN_ERR_IDX];
+    println!("{} bytes read", bytes);
+    if error_code != 0 {
+        println!("GOT ERROR: {}", error_code)
+    }
+    return buf[2];
+}
+
+fn nes_discrete_exp0_prgrom_wr<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16, misc: u16) {
+    // #define DISCRETE_EXP0_PRGROM_WR		0x00
+    //wValue = misc << 8 | op_nes[opcode]
+    //wIndex = operand
+    let value: u16 = misc << 8;
+
+    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
+    let request = 3; // 3 is for NES
+    let index = operand;
+    let mut buf:[u8; 1]=[0; 1]; // no Rlen so 1
+    let timeout = Duration::from_secs(1);
+
+    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
+    let error_code = buf[RETURN_ERR_IDX];
+    println!("{} bytes read", bytes);
+    if error_code != 0 {
+        println!("GOT ERROR: {}", error_code)
+    }
 }
 
 fn io_exp0_pullup_test<T: UsbContext>(device_handle: &DeviceHandle<T>) {
@@ -91,6 +239,7 @@ fn io_exp0_pullup_test<T: UsbContext>(device_handle: &DeviceHandle<T>) {
     println!("EXP0 pull-up test: {:?}", &buf[RETURN_LEN_IDX + 1..]);
 }
 
+#[derive(Eq, PartialEq)]
 enum Mirroring {
     VERT,
     HORZ,
