@@ -1,9 +1,20 @@
-use rusb::{Context, DeviceHandle, Result, Version, UsbContext, Direction, RequestType, Recipient, request_type};
-use std::time::Duration;
+use rusb::{Context, DeviceHandle, Result, UsbContext, Version};
 use std::fs::File;
-use std::io::BufWriter;
 use std::io::prelude::*;
+use std::io::BufWriter;
+#[allow(dead_code)]
+mod bootload;
+#[allow(dead_code)]
+mod buffer;
+#[allow(dead_code)]
 mod io;
+#[allow(dead_code)]
+mod nes;
+#[allow(dead_code)]
+mod operation;
+#[allow(dead_code)]
+mod pinport;
+mod util;
 
 const VENDOR_ID: u16 = 0x16C0;
 const PRODUCT_ID: u16 = 0x05DC;
@@ -35,14 +46,15 @@ fn main() {
     let context = Context::new().unwrap();
     let device_handle = get_device_handle(&context).unwrap();
     // get device version from firmware
+    //"\x1b[0;31mSO\x1b[0m"
     println!("Get app version");
-    get_app_version(&device_handle);
+    bootload::get_app_ver(&device_handle);
 
     println!("IO_RESET");
-    io_reset(&device_handle);
+    io::reset(&device_handle);
     // NES INIT
     println!("NES_INIT");
-    io_nes_init(&device_handle);
+    io::nes_init(&device_handle);
     // TEST NROM
     test_nrom(&device_handle);
 
@@ -57,15 +69,170 @@ fn main() {
     let mirroring = detect_mapper_mirroring(&device_handle).unwrap();
     create_header(&mut f, 32, 8, mirroring);
     //   dump_prgrom(file, 32, false)
-    //
+    dump_prgrom(&device_handle, &mut f, 32);
 
     //   dump_chrrom
-    // IO.RESET
+
     println!("IO_RESET");
-    io_reset(&device_handle);
+    io::reset(&device_handle);
 }
 
-fn create_header<W: Write>(file: &mut BufWriter<W>, prg_size: u8, chr_size: u8, mirroring: Mirroring) {
+fn dump_prgrom<T: UsbContext, W: Write>(
+    device_handle: &DeviceHandle<T>,
+    file: &mut BufWriter<W>,
+    rom_size_kb: u32,
+) {
+    let mut kb_per_read = 32;
+
+    // Handle 16KB nroms.
+    if rom_size_kb < kb_per_read {
+        kb_per_read = rom_size_kb;
+    }
+
+    // local num_reads = rom_size_KB / KB_per_read
+    let num_reads = rom_size_kb / kb_per_read;
+    // local read_count = 0
+    let mut read_count = 0;
+    // local addr_base = 0x08	-- $8000
+    let addr_base = 0x08;
+
+    // while ( read_count < num_reads ) do
+    //
+    // 	if debug then print( "dump PRG part ", read_count, " of ", num_reads) end
+    //  --               file   sizeKB       map         mem         debug
+    // 	dump.dumptofile( file, KB_per_read, addr_base, "NESCPU_4KB", false )
+    //
+    // 	read_count = read_count + 1
+    // end
+    while read_count < num_reads {
+        dump(&device_handle, file, kb_per_read, addr_base);
+        read_count += 1;
+    }
+}
+
+fn dump<T: UsbContext, W: Write>(
+    device_handle: &DeviceHandle<T>,
+    file: &mut BufWriter<W>,
+    size_kb: u32,
+    map: u32,
+) {
+    //local buff0 = 0
+    let buff0 = 0;
+    //local buff1 = 1
+    let buff1 = 1;
+    //local cur_buff_status = 0
+    // let curr_buff_status = 0;
+    //local data = nil --lua stores data in strings
+    //
+    //if debug then print("dumping cart") end
+    println!("Dumping cart");
+
+    //dict.operation("SET_OPERATION", op_buffer["RESET"] )
+    // shared_dict_buffer #define RESET		0x01
+    // TODO: Change buffer/operation operands to enum
+    println!("SET_OPERATION RESET");
+    operation::set_operation(&device_handle, 0x01);
+
+    //--reset buffers first
+    //dict.buffer("RAW_BUFFER_RESET")
+    //local data = nil --lua stores data in strings
+    //
+    //if debug then print("dumping cart") end
+    println!("Dumping cart");
+
+    //dict.operation("SET_OPERATION", op_buffer["RESET"] )
+    // shared_dict_buffer #define RESET		0x01
+    println!("SET_OPERATION RESET");
+    operation::set_operation(&device_handle, 0x01);
+
+    //--reset buffers first
+    //dict.buffer("RAW_BUFFER_RESET")
+    println!("RAW_BUFFER_RESET");
+    buffer::raw_buffer_reset(&device_handle);
+
+    //--need to allocate some buffers for dumping
+    //--2x 128Byte buffers
+    //local num_buffers = 2
+    //local buff_size = 128
+    //if debug then print("allocating buffers") end
+    //assert(buffers.allocate( num_buffers, buff_size ), "fail to allocate buffers")
+    buffer_allocate(&device_handle, 2, 128);
+    // op_buffer[mem] (op_buffer["NESCPU_4KB"]) = 0x20
+    // NROM = mapper 0
+    // op_buffer[NOVAR] = 0
+    // dict.buffer("SET_MAP_N_MAPVAR", (mapper<<8 | op_buffer["NOVAR"]), buff0 )
+    buffer::set_map_n_mapvar(&device_handle, 0 << 8 | 0, buff0);
+    buffer::set_map_n_mapvar(&device_handle, 0 << 8 | 0, buff1);
+
+    // op_buffer[STARTDUMP] = 0xD2
+    println!("SET_OPERATION STARTDUMP");
+    operation::set_operation(&device_handle, 0xD2);
+
+    println!("SET_OPERATION RESET");
+    operation::set_operation(&device_handle, 0x01);
+    println!("RAW_BUFFER_RESET");
+    buffer::raw_buffer_reset(&device_handle);
+}
+
+//app/buffers.lua allocate()
+fn buffer_allocate<T: UsbContext>(
+    device_handle: &DeviceHandle<T>,
+    num_buffers: u16,
+    buff_size: u16,
+) {
+    let buff0basebank = 0;
+    // shared_dict_buffer.h:  #define RAW_BANK_SIZE   32
+    // local numbanks = buff_size/ (op_buffer["RAW_BANK_SIZE"])
+    let numbanks = buff_size / 32;
+    let buff1basebank = numbanks;
+
+    let mut buff0id = 0;
+    let mut buff1id = 0;
+    let mut reload = 0;
+    let mut buff0_firstpage = 0;
+    let mut buff1_firstpage = 0;
+
+    if (num_buffers == 2) && (buff_size == 128) {
+        //buff0 dumps first half of page, buff1 dumps second half, repeat
+        //MSB tells buffer value of A7 when operating
+        buff0id = 0x00;
+        buff1id = 0x80;
+        //set reload (value added to page_num after each load/dump to sum of buffers
+        // 2 * 128 = 256 -> reload = 1
+        reload = 0x01;
+        //set first page
+        buff0_firstpage = 0x0000;
+        buff1_firstpage = 0x0000;
+    } else if (num_buffers == 2) && (buff_size == 256) {
+        //buff0 dumps even pages, buff1 dumps odd pages
+        //buffer id not used for addressing both id zero for now..
+        buff0id = 0x00;
+        buff1id = 0x00;
+        //set reload (value added to page_num after each load/dump to sum of buffers
+        // 2 * 256 = 512 -> reload = 2
+        reload = 0x02;
+        //set first page of each buffer
+        buff0_firstpage = 0x0000;
+        buff1_firstpage = 0x0001;
+    } else {
+        println!("ERROR! Not setup to handle this buffer config");
+    }
+    println!("Buffer allocate buffer0");
+    buffer::allocate_buffer0(&device_handle, (buff0id << 8) | buff0basebank, numbanks);
+    println!("Buffer allocate buffer1");
+    buffer::allocate_buffer1(&device_handle, (buff1id << 8) | buff1basebank, numbanks);
+    println!("Buffer set reload pagenum0");
+    buffer::set_reload_pagenum0(&device_handle, buff0_firstpage, reload);
+    println!("Buffer set reload pagenum1");
+    buffer::set_reload_pagenum1(&device_handle, buff1_firstpage, reload);
+}
+
+fn create_header<W: Write>(
+    file: &mut BufWriter<W>,
+    prg_size: u8,
+    chr_size: u8,
+    mirroring: Mirroring,
+) {
     file.write(b"NES").unwrap();
 
     file.write_all(&[0x1A]).unwrap();
@@ -101,142 +268,33 @@ fn test_nrom<T: UsbContext>(device_handle: &DeviceHandle<T>) {
     println!("Detect mapper mirroring");
     detect_mapper_mirroring(&device_handle);
     //    IO EXP0_PULLUP_TEST
-    io_exp0_pullup_test(&device_handle);
+    io::exp0_pullup_test(&device_handle);
     //    read PRG-ROM manf ID
-    nes_discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0xAA);
-    nes_discrete_exp0_prgrom_wr(&device_handle, 0x2AAA, 0x55);
-    nes_discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0x90);
+    nes::discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0xAA);
+    nes::discrete_exp0_prgrom_wr(&device_handle, 0x2AAA, 0x55);
+    nes::discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0x90);
 
-    let rv = nes_cpu_rd(&device_handle, 0x8000);
+    let rv = nes::cpu_rd(&device_handle, 0x8000);
     println!("PRG-ROM manf ID: 0x{:x}", rv);
 
-    let rv = nes_cpu_rd(&device_handle, 0x8001);
+    let rv = nes::cpu_rd(&device_handle, 0x8001);
     println!("PRG-ROM prod ID: 0x{:x}", rv);
 
     // Exit
-    nes_discrete_exp0_prgrom_wr(&device_handle, 0x8000, 0xF0);
+    nes::discrete_exp0_prgrom_wr(&device_handle, 0x8000, 0xF0);
 
     //    read CHR-ROM manf ID
-    nes_ppu_wr(&device_handle, 0x1555, 0xAA);
-    nes_ppu_wr(&device_handle, 0x0AAA, 0x55);
-    nes_ppu_wr(&device_handle, 0x1555, 0x90);
+    nes::ppu_wr(&device_handle, 0x1555, 0xAA);
+    nes::ppu_wr(&device_handle, 0x0AAA, 0x55);
+    nes::ppu_wr(&device_handle, 0x1555, 0x90);
 
-    let rv = nes_ppu_rd(&device_handle, 0x0000);
+    let rv = nes::ppu_rd(&device_handle, 0x0000);
     println!("CHR-ROM manf ID: 0x{:x}", rv);
 
-    let rv = nes_ppu_rd(&device_handle, 0x0001);
+    let rv = nes::ppu_rd(&device_handle, 0x0001);
     println!("CHR-ROM prod ID: 0x{:x}", rv);
     // EXIT
-    nes_ppu_wr(&device_handle, 0x0000, 0xF0);
-}
-
-fn nes_ppu_rd<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16) -> u8 {
-    //NES_PPU_RD 0x82 RL=3
-    let value = 0x82;
-
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 3; // NES
-    let index = operand;
-    let mut buf:[u8; 3]=[0; 3]; // RL is 3
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-    return buf[2];
-}
-
-fn nes_ppu_wr<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16, misc: u16) {
-    // #define NES_PPU_WR 0x01
-    // wValue = misc << 8 | op_nes[opcode]
-    // wIndex = operand
-    let value: u16 = (misc << 8) | 0x01;
-
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 3; // 3 is for NES
-    let index = operand;
-    let mut buf:[u8; 1]=[0; 1]; // no Rlen so 1
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-}
-
-fn nes_cpu_rd<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16) -> u8 {
-    //NES_CPU_RD 0x81 RL=3
-    let value = 0x81;
-
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 3; // NES
-    let index = operand;
-    let mut buf:[u8; 3]=[0; 3]; // RL is 3
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-    return buf[2];
-}
-
-fn nes_discrete_exp0_prgrom_wr<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16, misc: u16) {
-    // #define DISCRETE_EXP0_PRGROM_WR		0x00
-    //wValue = misc << 8 | op_nes[opcode]
-    //wIndex = operand
-    let value: u16 = misc << 8;
-
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 3; // 3 is for NES
-    let index = operand;
-    let mut buf:[u8; 1]=[0; 1]; // no Rlen so 1
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-}
-
-fn io_exp0_pullup_test<T: UsbContext>(device_handle: &DeviceHandle<T>) {
-    //   Wlen 1 is default
-    //   operand 0 is default
-    //   request is 2 for IO commands 3 for NES commands
-    
-    //    ep,	      dictionary  wValue[misc:opcode]             wIndex	wLength	 		data
-    //direction.IN,               misc << 8 | io::IO_RESET        operand       data
-    //count, data = usb_vend_xfr( 
-    //        ep, dict["DICT_IO"], ( misc<<8 | op_io[opcode]),	operand,	wLength,	data)
-    //
-
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 2; // 2 is for IO, 3 is for NES, 10 is bootload see shared_dictionaries.h
-    // let value: u16 = io::IO_RESET; // op_io[opcode] | misc << 8
-    let value: u16 = io::EXP0_PULLUP_TEST; // op_io[opcode] | misc << 8
-    let index = 0; // operand 0 is default see Rlen in shared_io.h
-    let mut buf:[u8; 3]=[0; 3]; // RL 3
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    //TODO: return error if not error_code 0
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-    println!("{} bytes read", bytes);
-    println!("data len {}", buf[RETURN_LEN_IDX]);
-    println!("EXP0 pull-up test: {:?}", &buf[RETURN_LEN_IDX + 1..]);
+    nes::ppu_wr(&device_handle, 0x0000, 0xF0);
 }
 
 #[derive(Eq, PartialEq)]
@@ -255,137 +313,32 @@ fn detect_mapper_mirroring<T: UsbContext>(device_handle: &DeviceHandle<T>) -> Re
     // PINPORT ADDR_SET, 0x0800
     //   1       17      0x0800
     println!("PINPORT_ADDR_SET 0x0800");
-    pinport_addr_set(&device_handle, 0x0800);
+    pinport::addr_set(&device_handle, 0x0800);
     // readH = PINPORT CTL_RD, CIA10         RL=4 (err_code, data_len, LSB, MSB)
     //           1       6       11
-    let read_h = pinport_ctl_rd(&device_handle, 11).unwrap();
+    let read_h = pinport::ctl_rd(&device_handle, 11).unwrap();
     println!("Read h: {}", read_h);
 
     // PINPORT ADDR_SET, 0x0400
     println!("PINPORT_ADDR_SET 0x0400");
-    pinport_addr_set(&device_handle, 0x0400);
+    pinport::addr_set(&device_handle, 0x0400);
     // readH = PINPORT CTL_RD, CIA10         RL=4 (err_code, data_len, LSB, MSB)
     //           1       6       11
-    let read_v = pinport_ctl_rd(&device_handle, 11).unwrap();
+    let read_v = pinport::ctl_rd(&device_handle, 11).unwrap();
 
     if read_v == 0 && read_h == 0 {
         println!("1SCNA - 1screen A mirroring");
         return Ok(Mirroring::SCNA);
-    } else if read_v !=0 && read_h == 0 {
+    } else if read_v != 0 && read_h == 0 {
         println!("VERT - Vertical mirroring");
         return Ok(Mirroring::VERT);
-    } else if read_v ==0 && read_h != 0 {
+    } else if read_v == 0 && read_h != 0 {
         println!("HORZ - Horizontal mirroring");
         return Ok(Mirroring::HORZ);
     } else {
         println!("1SCNB - 1screen B mirroring");
         return Ok(Mirroring::SCNB);
     };
-}
-
-fn pinport_ctl_rd<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16) -> Result<u16> {
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 1; // 1 is for pinport
-    let value: u16 = 6; // 17 is CTL_RD
-    let index = operand; // CIA is 11
-    let mut buf:[u8; 4]=[0; 4]; // RL=4
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-
-    println!("{} bytes read", bytes);
-    println!("data len {}", buf[RETURN_LEN_IDX]);
-    println!("CTL_RD: {:x?}", &buf);
-    let result: u16 = ((buf[3] as u16) << 8) | buf[2] as u16;
-    return Ok(result)
-}
-
-fn pinport_addr_set<T: UsbContext>(device_handle: &DeviceHandle<T>, address: u16) {
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 1; // 1 is for pinport
-    let value: u16 = 0x11; // 17 is addr set
-    let index = address;
-    let mut buf:[u8; 1]=[0; 1]; // no Rlen so 1
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-}
-
-fn io_reset<T: UsbContext>(device_handle: &DeviceHandle<T>) {
-    //   Wlen 1 is default
-    //   operand 0 is default
-    //   request is 2 for IO commands 3 for NES commands
-    
-    //    ep,	      dictionary  wValue[misc:opcode]             wIndex	wLength	 		data
-    //direction.IN,               misc << 8 | io::IO_RESET        operand       data
-    //count, data = usb_vend_xfr( 
-    //        ep, dict["DICT_IO"], ( misc<<8 | op_io[opcode]),	operand,	wLength,	data)
-    //
-
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 2; // 2 is for IO, 3 is for NES, 10 is bootload see shared_dictionaries.h
-    // let value: u16 = io::IO_RESET; // op_io[opcode] | misc << 8
-    let value: u16 = io::IO_RESET; // op_io[opcode] | misc << 8
-    let index = 0; // operand 0 is default see Rlen in shared_io.h
-    let mut buf:[u8; 1]=[0; 1]; // no Rlen so 1
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    //TODO: return error if not error_code 0
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-}
-
-fn io_nes_init<T: UsbContext>(device_handle: &DeviceHandle<T>) {
-    let request_type = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 2; // 2 is for IO, 3 is for NES, 10 is bootload see shared_dictionaries.h
-    // let value: u16 = io::IO_RESET; // op_io[opcode] | misc << 8
-    let value: u16 = io::NES_INIT; // op_io[opcode] | misc << 8
-    let index = 0; // operand 0 is default see Rlen in shared_io.h
-    let mut buf:[u8; 1]=[0; 1]; // no Rlen so 1
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(request_type, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    //TODO: return error if not error_code 0
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-}
-
-fn get_app_version<T: UsbContext>(device_handle: &DeviceHandle<T>) {
-    let rtype = request_type(Direction::In, RequestType::Vendor, Recipient::Device);
-    let request = 10; // 2 is for IO, 3 is for NES, 10 is bootload see shared_dictionaries.h
-    // let value: u16 = io::IO_RESET; // op_io[opcode] | misc << 8
-    let value: u16 = 12; // op_io[opcode] | misc << 8
-    let index = 0; // operand 0 is default in shared_io.h
-    let mut buf:[u8; 3]=[0; 3]; // RLEN is 3
-    let timeout = Duration::from_secs(1);
-
-    let bytes = device_handle.read_control(rtype, request, value, index, &mut buf, timeout).unwrap();
-    let error_code = buf[RETURN_ERR_IDX];
-    println!("{} bytes read", bytes);
-    println!("data len {}", buf[RETURN_LEN_IDX]);
-    println!("firmware app ver request: {:x?}", &buf[2..]);
-    //TODO: return error if not error_code 0
-    if error_code != 0 {
-        println!("GOT ERROR: {}", error_code)
-    }
-    //TODO: return error if data length does not match buffer length - error index and length index
 }
 
 fn get_device_handle<T: UsbContext>(context: &T) -> Option<DeviceHandle<T>> {
@@ -395,23 +348,32 @@ fn get_device_handle<T: UsbContext>(context: &T) -> Option<DeviceHandle<T>> {
 
         if device_desc.vendor_id() == VENDOR_ID && device_desc.product_id() == PRODUCT_ID {
             println!("Found device");
-            println!("Bus {:03} Device {:03} ID {:04x}:{:04x}",
+            println!(
+                "Bus {:03} Device {:03} ID {:04x}:{:04x}",
                 device.bus_number(),
                 device.address(),
                 device_desc.vendor_id(),
-                device_desc.product_id());
+                device_desc.product_id()
+            );
             println!("Open device");
             let device_handle = device.open().unwrap();
-            let product = device_handle.read_product_string_ascii(&device_desc).unwrap();
+            let product = device_handle
+                .read_product_string_ascii(&device_desc)
+                .unwrap();
             println!("Product string: {}", product);
-            let manufacturer = device_handle.read_manufacturer_string_ascii(&device_desc).unwrap();
+            let manufacturer = device_handle
+                .read_manufacturer_string_ascii(&device_desc)
+                .unwrap();
             println!("Manufacturer string: {}", manufacturer);
             if manufacturer == INL_MANUFACTURER && product == INL_PRODUCT {
-
                 let firmware_version = device_desc.device_version();
                 if check_version(firmware_version) {
-                    println!("INL retro-prog was found with firmware version {}.{}.{}",
-                        firmware_version.major(),firmware_version.minor(), firmware_version.sub_minor());
+                    println!(
+                        "INL retro-prog was found with firmware version {}.{}.{}",
+                        firmware_version.major(),
+                        firmware_version.minor(),
+                        firmware_version.sub_minor()
+                    );
                     return Some(device_handle);
                 } else {
                     println!("INL Retro-Prog found, but firmware is too old!");
