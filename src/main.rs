@@ -70,9 +70,9 @@ fn main() {
     create_header(&mut f, 32, 8, mirroring);
     //   dump_prgrom(file, 32, false)
     dump_prgrom(&device_handle, &mut f, 32);
+    dump_chrrom(&device_handle, &mut f, 8);
 
-    //   dump_chrrom
-
+    f.flush().unwrap();
     println!("IO_RESET");
     io::reset(&device_handle);
 }
@@ -104,8 +104,34 @@ fn dump_prgrom<T: UsbContext, W: Write>(
     //
     // 	read_count = read_count + 1
     // end
+    // NESCPU_4KB = 0x20
     while read_count < num_reads {
-        dump(&device_handle, file, kb_per_read, addr_base);
+        dump(&device_handle, file, kb_per_read, addr_base, 0x20);
+        read_count += 1;
+    }
+}
+
+fn dump_chrrom<T: UsbContext, W: Write>(
+    device_handle: &DeviceHandle<T>,
+    file: &mut BufWriter<W>,
+    rom_size_kb: u32,
+) {
+    let kb_per_read = 8;
+
+    // local num_reads = rom_size_KB / KB_per_read
+    let num_reads = rom_size_kb / kb_per_read;
+    // local read_count = 0
+    let mut read_count = 0;
+    // local addr_base = 0x00	-- $0000
+    let addr_base = 0x00;
+
+    // while ( read_count < num_reads ) do
+    // 	dump.dumptofile( file, KB_per_read, addr_base, "NESPPU_1KB", false )
+    // 	read_count = read_count + 1
+    // end
+    // NESPPU_1KB = 0x21
+    while read_count < num_reads {
+        dump(&device_handle, file, kb_per_read, addr_base, 0x21);
         read_count += 1;
     }
 }
@@ -114,7 +140,8 @@ fn dump<T: UsbContext, W: Write>(
     device_handle: &DeviceHandle<T>,
     file: &mut BufWriter<W>,
     size_kb: u32,
-    map: u32,
+    map: u16,
+    mem: u16,
 ) {
     //local buff0 = 0
     let buff0 = 0;
@@ -135,20 +162,12 @@ fn dump<T: UsbContext, W: Write>(
 
     //--reset buffers first
     //dict.buffer("RAW_BUFFER_RESET")
+    println!("RAW_BUFFER_RESET");
+    buffer::raw_buffer_reset(&device_handle);
     //local data = nil --lua stores data in strings
     //
     //if debug then print("dumping cart") end
     println!("Dumping cart");
-
-    //dict.operation("SET_OPERATION", op_buffer["RESET"] )
-    // shared_dict_buffer #define RESET		0x01
-    println!("SET_OPERATION RESET");
-    operation::set_operation(&device_handle, 0x01);
-
-    //--reset buffers first
-    //dict.buffer("RAW_BUFFER_RESET")
-    println!("RAW_BUFFER_RESET");
-    buffer::raw_buffer_reset(&device_handle);
 
     //--need to allocate some buffers for dumping
     //--2x 128Byte buffers
@@ -160,13 +179,47 @@ fn dump<T: UsbContext, W: Write>(
     // op_buffer[mem] (op_buffer["NESCPU_4KB"]) = 0x20
     // NROM = mapper 0
     // op_buffer[NOVAR] = 0
+    // op_buffer["MASKROM"] = 0xDD
+
+    // if debug then print("setting map n part") end
+    // dict.buffer("SET_MEM_N_PART", (op_buffer[mem]<<8 | op_buffer["MASKROM"]), buff0 )
+    // dict.buffer("SET_MEM_N_PART", (op_buffer[mem]<<8 | op_buffer["MASKROM"]), buff1 )
+    buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff0);
+    buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff1);
+
     // dict.buffer("SET_MAP_N_MAPVAR", (mapper<<8 | op_buffer["NOVAR"]), buff0 )
-    buffer::set_map_n_mapvar(&device_handle, 0 << 8 | 0, buff0);
-    buffer::set_map_n_mapvar(&device_handle, 0 << 8 | 0, buff1);
+    // address base = 0x08  -- $8000
+    buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff0);
+    buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff1);
 
     // op_buffer[STARTDUMP] = 0xD2
     println!("SET_OPERATION STARTDUMP");
     operation::set_operation(&device_handle, 0xD2);
+
+    // for i=1, (sizeKB*1024/buff_size)
+    let mut buf: [u8; 128] = [0; 128];
+    let mut buff_status = 0;
+    println!("sizeKB*1024/buff_size={}", size_kb * 1024 / 128);
+    for i in 0..(size_kb * 1024 / 128) {
+        for try_nbr in 0..20 {
+            buff_status = buffer::get_cur_buff_status(&device_handle);
+            // DUMPED = 0xD8
+            if buff_status == 0xD8 {
+                break;
+            }
+        }
+        if buff_status != 0xD8 {
+            println!("DID NOT GET BUFF STATUS IN {} TRIES", try_nbr);
+            println!("STOPPING!");
+            break;
+        }
+
+        buffer::buff_payload(&device_handle, &mut buf);
+
+        file.write_all(&buf).unwrap();
+    }
+
+    println!("DUMPING DONE!");
 
     println!("SET_OPERATION RESET");
     operation::set_operation(&device_handle, 0x01);
@@ -259,8 +312,6 @@ fn create_header<W: Write>(
 
     // byte 8-15
     file.write_all(&[0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
-
-    file.flush().unwrap();
 }
 
 fn test_nrom<T: UsbContext>(device_handle: &DeviceHandle<T>) {

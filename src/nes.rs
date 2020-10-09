@@ -103,14 +103,13 @@ pub fn discrete_exp0_prgrom_wr<T: UsbContext>(
 ) {
     let request = 3; // 3 is for nes
     let mut buf: [u8; 1] = [0; 1];
-    let value: u16 = (misc << 8) | DISCRETE_EXP0_PRGROM_WR;
     util::read_device(
         device_handle,
         &mut buf,
         request,
         DISCRETE_EXP0_PRGROM_WR,
         operand,
-        value,
+        misc,
     );
 }
 
@@ -131,6 +130,5 @@ pub fn ppu_rd<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16) -> u
 pub fn ppu_wr<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16, misc: u16) {
     let request = 3; // 3 is for nes
     let mut buf: [u8; 1] = [0; 1];
-    let value: u16 = (misc << 8) | NES_PPU_WR;
-    util::read_device(device_handle, &mut buf, request, NES_PPU_WR, operand, value);
+    util::read_device(device_handle, &mut buf, request, NES_PPU_WR, operand, misc);
 }
