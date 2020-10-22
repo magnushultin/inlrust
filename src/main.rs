@@ -1,19 +1,16 @@
-use rusb::{Context, DeviceHandle, Result, UsbContext, Version};
+use rusb::{Context, DeviceHandle, UsbContext, Version};
+use std::env;
+use std::process;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
-#[allow(dead_code)]
 mod bootload;
-#[allow(dead_code)]
 mod buffer;
-#[allow(dead_code)]
 mod io;
-#[allow(dead_code)]
 mod nes;
-#[allow(dead_code)]
 mod operation;
-#[allow(dead_code)]
 mod pinport;
+mod opcodes;
 mod util;
 
 const VENDOR_ID: u16 = 0x16C0;
@@ -28,33 +25,125 @@ const MAX_VUSB: usize = 254;
 const RETURN_ERR_IDX: usize = 0;
 const RETURN_LEN_IDX: usize = 1;
 
-// Since partial ord is not implemented for Version we do this ugly comparsion.
-// TODO: Support minor and sub_minor minimum version
-fn check_version(device_version: Version) -> bool {
-    if device_version.major() >= MIN_MAJOR_FW_VERSION {
-        if device_version.minor() > 0 {
-            return true;
-        }
-        if device_version.sub_minor() > 0 {
-            return true;
-        }
+// Command line options
+#[derive(Debug)]
+struct CommandLineOptions {
+    console: String,
+    filename: String,
+    mapper: String,
+    prg_size: u32, // x
+    chr_size: u32  // y
+}
+
+pub fn help() {
+    println!("
+Usage: program [options]
+
+Options/Flags:
+  --help, -h                                    Displays this message.
+  -c console                                    Console port, (GBA,GENESIS,N64,NES)
+  -d filename                                   Dump cartridge ROMs to this filename
+  -a filename                                   If provided, write ram to this filename
+  -m mapper                                     NES:    (action53,bnrom,cdream,cninja,cnrom,dualport,easynsf,fme7,
+                                                         mapper30,mmc1,mmc3,mmc4,mmc5,nrom,unrom)
+  -x size_kbytes                                NES-only, size of PRG-ROM in kilobytes
+  -y size_kbytes                                NES-only, size of CHR-ROM in kilobytes
+  -w size_kbytes                                NES-only, size of WRAM in kilobytes
+")
+}
+
+fn parse_command_line(args: &[String]) -> Result<CommandLineOptions, String> {
+    if args.len() < 2 {
+        return Err(String::from("Not enough arguments."))
     }
-    return false;
+    let mut console = "".to_owned();
+    let mut filename = "".to_owned();
+    let mut mapper = "".to_owned();
+    let mut prg_size = 0;
+    let mut chr_size = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" => return Err(String::from("")),
+            "-c" =>  {
+                console = args[i+1].clone();
+                i += 1;
+            },
+            "-d" =>  {
+                filename = args[i+1].clone();
+                i += 1;
+            },
+            "-m" =>  {
+                mapper = args[i+1].clone();
+                i += 1;
+            },
+            "-x" =>  {
+                prg_size = parse_number(&args[i+1])?;
+                i += 1;
+            },
+            "-y" =>  {
+                chr_size = parse_number(&args[i+1])?;
+                i += 1;
+            },
+            _ => (),
+        }
+        i += 1;
+    }
+
+    return Ok(CommandLineOptions { console, filename , mapper, prg_size, chr_size})
+}
+
+fn parse_number(argument: &String) -> Result<u32, String> {
+    let input_opt = argument.clone().parse::<u32>();
+    let size = match input_opt {
+        Ok(size) => size,
+        Err(e) => {
+            return Err(format!("While parsing \"{}\" got err: {}", argument, e));
+        }
+    };
+    return Ok(size);
 }
 
 fn main() {
+    // TODO: Add command line options
+    // console mapper prg chr filename
+    // -c NES -m nrom -x 32 -y 8 -d gamename.bin
+    let args: Vec<String> = env::args().collect();
+
+    let cmd_options = parse_command_line(&args).unwrap_or_else(|err| {
+        println!("{}", err);
+        help();
+        process::exit(1);
+    });
+    println!("{:?}", cmd_options);
+
     let context = Context::new().unwrap();
     let device_handle = get_device_handle(&context).unwrap();
     // get device version from firmware
     //"\x1b[0;31mSO\x1b[0m"
     println!("Get app version");
     bootload::get_app_ver(&device_handle);
+    
+    // NES STARTS here
+    if cmd_options.console.to_lowercase() == "nes" {
+        dump_nes_rom(&device_handle, &cmd_options);
+    } else {
+        println!("Console {} not supported!", cmd_options.console);
+    }
 
+    println!("IO_RESET");
+    io::reset(&device_handle);
+}
+
+fn dump_nes_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions) {
     println!("IO_RESET");
     io::reset(&device_handle);
     // NES INIT
     println!("NES_INIT");
     io::nes_init(&device_handle);
+
+    // NROM starts here
     // TEST NROM
     test_nrom(&device_handle);
 
@@ -62,19 +151,17 @@ fn main() {
     //   detect_mapper_mirroring
     //   ciccom
     // READ
-    let file = File::create("gamename.nes").unwrap();
+    let file = File::create(&cmd_options.filename).unwrap();
     let mut f = BufWriter::new(file);
 
     //   create_header
     let mirroring = detect_mapper_mirroring(&device_handle).unwrap();
-    create_header(&mut f, 32, 8, mirroring);
+    create_header(&mut f, cmd_options.prg_size as u8, cmd_options.chr_size as u8, mirroring);
     //   dump_prgrom(file, 32, false)
-    dump_prgrom(&device_handle, &mut f, 32);
-    dump_chrrom(&device_handle, &mut f, 8);
+    dump_prgrom(&device_handle, &mut f, cmd_options.prg_size);
+    dump_chrrom(&device_handle, &mut f, cmd_options.chr_size);
 
     f.flush().unwrap();
-    println!("IO_RESET");
-    io::reset(&device_handle);
 }
 
 fn dump_prgrom<T: UsbContext, W: Write>(
@@ -209,7 +296,7 @@ fn dump<T: UsbContext, W: Write>(
             }
         }
         if buff_status != 0xD8 {
-            println!("DID NOT GET BUFF STATUS IN {} TRIES", try_nbr);
+            println!("DID NOT GET BUFF STATUS");
             println!("STOPPING!");
             break;
         }
@@ -356,7 +443,7 @@ enum Mirroring {
     SCNB,
 }
 
-fn detect_mapper_mirroring<T: UsbContext>(device_handle: &DeviceHandle<T>) -> Result<Mirroring> {
+fn detect_mapper_mirroring<T: UsbContext>(device_handle: &DeviceHandle<T>) -> Result<Mirroring, String> {
     // TODO: call mmc3 detection function
     // TODO: call mmc1 detection function
     // TODO: fme7 and other ASIC mappers
@@ -434,4 +521,18 @@ fn get_device_handle<T: UsbContext>(context: &T) -> Option<DeviceHandle<T>> {
         }
     }
     return None;
+}
+
+// Since partial ord is not implemented for Version we do this ugly comparsion.
+// TODO: Support minor and sub_minor minimum version
+fn check_version(device_version: Version) -> bool {
+    if device_version.major() >= MIN_MAJOR_FW_VERSION {
+        if device_version.minor() > 0 {
+            return true;
+        }
+        if device_version.sub_minor() > 0 {
+            return true;
+        }
+    }
+    return false;
 }
