@@ -1,9 +1,6 @@
 use rusb::{Context, DeviceHandle, UsbContext, Version};
 use std::env;
 use std::process;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufWriter;
 mod bootload;
 mod buffer;
 mod io;
@@ -12,6 +9,7 @@ mod operation;
 mod pinport;
 mod opcodes;
 mod util;
+mod nes_mappers;
 
 const VENDOR_ID: u16 = 0x16C0;
 const PRODUCT_ID: u16 = 0x05DC;
@@ -25,95 +23,13 @@ const MAX_VUSB: usize = 254;
 const RETURN_ERR_IDX: usize = 0;
 const RETURN_LEN_IDX: usize = 1;
 
-// Command line options
-#[derive(Debug)]
-struct CommandLineOptions {
-    console: String,
-    filename: String,
-    mapper: String,
-    prg_size: u32, // x
-    chr_size: u32  // y
-}
-
-pub fn help() {
-    println!("
-Usage: program [options]
-
-Options/Flags:
-  --help, -h                                    Displays this message.
-  -c console                                    Console port, (GBA,GENESIS,N64,NES)
-  -d filename                                   Dump cartridge ROMs to this filename
-  -a filename                                   If provided, write ram to this filename
-  -m mapper                                     NES:    (action53,bnrom,cdream,cninja,cnrom,dualport,easynsf,fme7,
-                                                         mapper30,mmc1,mmc3,mmc4,mmc5,nrom,unrom)
-  -x size_kbytes                                NES-only, size of PRG-ROM in kilobytes
-  -y size_kbytes                                NES-only, size of CHR-ROM in kilobytes
-  -w size_kbytes                                NES-only, size of WRAM in kilobytes
-")
-}
-
-fn parse_command_line(args: &[String]) -> Result<CommandLineOptions, String> {
-    if args.len() < 2 {
-        return Err(String::from("Not enough arguments."))
-    }
-    let mut console = "".to_owned();
-    let mut filename = "".to_owned();
-    let mut mapper = "".to_owned();
-    let mut prg_size = 0;
-    let mut chr_size = 0;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-h" | "--help" => return Err(String::from("")),
-            "-c" =>  {
-                console = args[i+1].clone();
-                i += 1;
-            },
-            "-d" =>  {
-                filename = args[i+1].clone();
-                i += 1;
-            },
-            "-m" =>  {
-                mapper = args[i+1].clone();
-                i += 1;
-            },
-            "-x" =>  {
-                prg_size = parse_number(&args[i+1])?;
-                i += 1;
-            },
-            "-y" =>  {
-                chr_size = parse_number(&args[i+1])?;
-                i += 1;
-            },
-            _ => (),
-        }
-        i += 1;
-    }
-
-    return Ok(CommandLineOptions { console, filename , mapper, prg_size, chr_size})
-}
-
-fn parse_number(argument: &String) -> Result<u32, String> {
-    let input_opt = argument.clone().parse::<u32>();
-    let size = match input_opt {
-        Ok(size) => size,
-        Err(e) => {
-            return Err(format!("While parsing \"{}\" got err: {}", argument, e));
-        }
-    };
-    return Ok(size);
-}
 
 fn main() {
-    // TODO: Add command line options
-    // console mapper prg chr filename
-    // -c NES -m nrom -x 32 -y 8 -d gamename.bin
     let args: Vec<String> = env::args().collect();
 
-    let cmd_options = parse_command_line(&args).unwrap_or_else(|err| {
+    let cmd_options = util::parse_command_line(&args).unwrap_or_else(|err| {
         println!("{}", err);
-        help();
+        util::help();
         process::exit(1);
     });
     println!("{:?}", cmd_options);
@@ -121,363 +37,19 @@ fn main() {
     let context = Context::new().unwrap();
     let device_handle = get_device_handle(&context).unwrap();
     // get device version from firmware
-    //"\x1b[0;31mSO\x1b[0m"
     println!("Get app version");
     bootload::get_app_ver(&device_handle);
     
-    // NES STARTS here
     if cmd_options.console.to_lowercase() == "nes" {
-        dump_nes_rom(&device_handle, &cmd_options);
+        nes::dump_rom(&device_handle, &cmd_options);
     } else {
-        println!("Console {} not supported!", cmd_options.console);
+        println!("Console {} is not supported!", cmd_options.console);
     }
 
     println!("IO_RESET");
     io::reset(&device_handle);
 }
 
-fn dump_nes_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions) {
-    println!("IO_RESET");
-    io::reset(&device_handle);
-    // NES INIT
-    println!("NES_INIT");
-    io::nes_init(&device_handle);
-
-    // NROM starts here
-    // TEST NROM
-    test_nrom(&device_handle);
-
-    // MIRROR
-    //   detect_mapper_mirroring
-    //   ciccom
-    // READ
-    let file = File::create(&cmd_options.filename).unwrap();
-    let mut f = BufWriter::new(file);
-
-    //   create_header
-    let mirroring = detect_mapper_mirroring(&device_handle).unwrap();
-    create_header(&mut f, cmd_options.prg_size as u8, cmd_options.chr_size as u8, mirroring);
-    //   dump_prgrom(file, 32, false)
-    dump_prgrom(&device_handle, &mut f, cmd_options.prg_size);
-    dump_chrrom(&device_handle, &mut f, cmd_options.chr_size);
-
-    f.flush().unwrap();
-}
-
-fn dump_prgrom<T: UsbContext, W: Write>(
-    device_handle: &DeviceHandle<T>,
-    file: &mut BufWriter<W>,
-    rom_size_kb: u32,
-) {
-    let mut kb_per_read = 32;
-
-    // Handle 16KB nroms.
-    if rom_size_kb < kb_per_read {
-        kb_per_read = rom_size_kb;
-    }
-
-    // local num_reads = rom_size_KB / KB_per_read
-    let num_reads = rom_size_kb / kb_per_read;
-    // local read_count = 0
-    let mut read_count = 0;
-    // local addr_base = 0x08	-- $8000
-    let addr_base = 0x08;
-
-    // while ( read_count < num_reads ) do
-    //
-    // 	if debug then print( "dump PRG part ", read_count, " of ", num_reads) end
-    //  --               file   sizeKB       map         mem         debug
-    // 	dump.dumptofile( file, KB_per_read, addr_base, "NESCPU_4KB", false )
-    //
-    // 	read_count = read_count + 1
-    // end
-    // NESCPU_4KB = 0x20
-    while read_count < num_reads {
-        dump(&device_handle, file, kb_per_read, addr_base, 0x20);
-        read_count += 1;
-    }
-}
-
-fn dump_chrrom<T: UsbContext, W: Write>(
-    device_handle: &DeviceHandle<T>,
-    file: &mut BufWriter<W>,
-    rom_size_kb: u32,
-) {
-    let kb_per_read = 8;
-
-    // local num_reads = rom_size_KB / KB_per_read
-    let num_reads = rom_size_kb / kb_per_read;
-    // local read_count = 0
-    let mut read_count = 0;
-    // local addr_base = 0x00	-- $0000
-    let addr_base = 0x00;
-
-    // while ( read_count < num_reads ) do
-    // 	dump.dumptofile( file, KB_per_read, addr_base, "NESPPU_1KB", false )
-    // 	read_count = read_count + 1
-    // end
-    // NESPPU_1KB = 0x21
-    while read_count < num_reads {
-        dump(&device_handle, file, kb_per_read, addr_base, 0x21);
-        read_count += 1;
-    }
-}
-
-fn dump<T: UsbContext, W: Write>(
-    device_handle: &DeviceHandle<T>,
-    file: &mut BufWriter<W>,
-    size_kb: u32,
-    map: u16,
-    mem: u16,
-) {
-    //local buff0 = 0
-    let buff0 = 0;
-    //local buff1 = 1
-    let buff1 = 1;
-    //local cur_buff_status = 0
-    // let curr_buff_status = 0;
-    //local data = nil --lua stores data in strings
-    //
-    //if debug then print("dumping cart") end
-    println!("Dumping cart");
-
-    //dict.operation("SET_OPERATION", op_buffer["RESET"] )
-    // shared_dict_buffer #define RESET		0x01
-    // TODO: Change buffer/operation operands to enum
-    println!("SET_OPERATION RESET");
-    operation::set_operation(&device_handle, 0x01);
-
-    //--reset buffers first
-    //dict.buffer("RAW_BUFFER_RESET")
-    println!("RAW_BUFFER_RESET");
-    buffer::raw_buffer_reset(&device_handle);
-    //local data = nil --lua stores data in strings
-    //
-    //if debug then print("dumping cart") end
-    println!("Dumping cart");
-
-    //--need to allocate some buffers for dumping
-    //--2x 128Byte buffers
-    //local num_buffers = 2
-    //local buff_size = 128
-    //if debug then print("allocating buffers") end
-    //assert(buffers.allocate( num_buffers, buff_size ), "fail to allocate buffers")
-    buffer_allocate(&device_handle, 2, 128);
-    // op_buffer[mem] (op_buffer["NESCPU_4KB"]) = 0x20
-    // NROM = mapper 0
-    // op_buffer[NOVAR] = 0
-    // op_buffer["MASKROM"] = 0xDD
-
-    // if debug then print("setting map n part") end
-    // dict.buffer("SET_MEM_N_PART", (op_buffer[mem]<<8 | op_buffer["MASKROM"]), buff0 )
-    // dict.buffer("SET_MEM_N_PART", (op_buffer[mem]<<8 | op_buffer["MASKROM"]), buff1 )
-    buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff0);
-    buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff1);
-
-    // dict.buffer("SET_MAP_N_MAPVAR", (mapper<<8 | op_buffer["NOVAR"]), buff0 )
-    // address base = 0x08  -- $8000
-    buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff0);
-    buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff1);
-
-    // op_buffer[STARTDUMP] = 0xD2
-    println!("SET_OPERATION STARTDUMP");
-    operation::set_operation(&device_handle, 0xD2);
-
-    // for i=1, (sizeKB*1024/buff_size)
-    let mut buf: [u8; 128] = [0; 128];
-    let mut buff_status = 0;
-    println!("sizeKB*1024/buff_size={}", size_kb * 1024 / 128);
-    for i in 0..(size_kb * 1024 / 128) {
-        for try_nbr in 0..20 {
-            buff_status = buffer::get_cur_buff_status(&device_handle);
-            // DUMPED = 0xD8
-            if buff_status == 0xD8 {
-                break;
-            }
-        }
-        if buff_status != 0xD8 {
-            println!("DID NOT GET BUFF STATUS");
-            println!("STOPPING!");
-            break;
-        }
-
-        buffer::buff_payload(&device_handle, &mut buf);
-
-        file.write_all(&buf).unwrap();
-    }
-
-    println!("DUMPING DONE!");
-
-    println!("SET_OPERATION RESET");
-    operation::set_operation(&device_handle, 0x01);
-    println!("RAW_BUFFER_RESET");
-    buffer::raw_buffer_reset(&device_handle);
-}
-
-//app/buffers.lua allocate()
-fn buffer_allocate<T: UsbContext>(
-    device_handle: &DeviceHandle<T>,
-    num_buffers: u16,
-    buff_size: u16,
-) {
-    let buff0basebank = 0;
-    // shared_dict_buffer.h:  #define RAW_BANK_SIZE   32
-    // local numbanks = buff_size/ (op_buffer["RAW_BANK_SIZE"])
-    let numbanks = buff_size / 32;
-    let buff1basebank = numbanks;
-
-    let mut buff0id = 0;
-    let mut buff1id = 0;
-    let mut reload = 0;
-    let mut buff0_firstpage = 0;
-    let mut buff1_firstpage = 0;
-
-    if (num_buffers == 2) && (buff_size == 128) {
-        //buff0 dumps first half of page, buff1 dumps second half, repeat
-        //MSB tells buffer value of A7 when operating
-        buff0id = 0x00;
-        buff1id = 0x80;
-        //set reload (value added to page_num after each load/dump to sum of buffers
-        // 2 * 128 = 256 -> reload = 1
-        reload = 0x01;
-        //set first page
-        buff0_firstpage = 0x0000;
-        buff1_firstpage = 0x0000;
-    } else if (num_buffers == 2) && (buff_size == 256) {
-        //buff0 dumps even pages, buff1 dumps odd pages
-        //buffer id not used for addressing both id zero for now..
-        buff0id = 0x00;
-        buff1id = 0x00;
-        //set reload (value added to page_num after each load/dump to sum of buffers
-        // 2 * 256 = 512 -> reload = 2
-        reload = 0x02;
-        //set first page of each buffer
-        buff0_firstpage = 0x0000;
-        buff1_firstpage = 0x0001;
-    } else {
-        println!("ERROR! Not setup to handle this buffer config");
-    }
-    println!("Buffer allocate buffer0");
-    buffer::allocate_buffer0(&device_handle, (buff0id << 8) | buff0basebank, numbanks);
-    println!("Buffer allocate buffer1");
-    buffer::allocate_buffer1(&device_handle, (buff1id << 8) | buff1basebank, numbanks);
-    println!("Buffer set reload pagenum0");
-    buffer::set_reload_pagenum0(&device_handle, buff0_firstpage, reload);
-    println!("Buffer set reload pagenum1");
-    buffer::set_reload_pagenum1(&device_handle, buff1_firstpage, reload);
-}
-
-fn create_header<W: Write>(
-    file: &mut BufWriter<W>,
-    prg_size: u8,
-    chr_size: u8,
-    mirroring: Mirroring,
-) {
-    file.write(b"NES").unwrap();
-
-    file.write_all(&[0x1A]).unwrap();
-    // byte 4
-    file.write_all(&[prg_size / 16]).unwrap();
-    // byte 5
-    file.write_all(&[chr_size / 8]).unwrap();
-
-    // byte 6
-    // NROM is mapper 0
-    let mapper = 0;
-
-    let mut temp = mapper & 0x0F;
-    temp = temp << 4;
-
-    if mirroring == Mirroring::VERT {
-        temp = temp | 0x01;
-    }
-    file.write_all(&[temp]).unwrap();
-
-    // byte 7
-    let temp = mapper & 0xF0;
-    file.write_all(&[temp]).unwrap();
-
-    // byte 8-15
-    file.write_all(&[0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
-}
-
-fn test_nrom<T: UsbContext>(device_handle: &DeviceHandle<T>) {
-    println!("Testing NROM");
-    println!("Detect mapper mirroring");
-    detect_mapper_mirroring(&device_handle);
-    //    IO EXP0_PULLUP_TEST
-    io::exp0_pullup_test(&device_handle);
-    //    read PRG-ROM manf ID
-    nes::discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0xAA);
-    nes::discrete_exp0_prgrom_wr(&device_handle, 0x2AAA, 0x55);
-    nes::discrete_exp0_prgrom_wr(&device_handle, 0x5555, 0x90);
-
-    let rv = nes::cpu_rd(&device_handle, 0x8000);
-    println!("PRG-ROM manf ID: 0x{:x}", rv);
-
-    let rv = nes::cpu_rd(&device_handle, 0x8001);
-    println!("PRG-ROM prod ID: 0x{:x}", rv);
-
-    // Exit
-    nes::discrete_exp0_prgrom_wr(&device_handle, 0x8000, 0xF0);
-
-    //    read CHR-ROM manf ID
-    nes::ppu_wr(&device_handle, 0x1555, 0xAA);
-    nes::ppu_wr(&device_handle, 0x0AAA, 0x55);
-    nes::ppu_wr(&device_handle, 0x1555, 0x90);
-
-    let rv = nes::ppu_rd(&device_handle, 0x0000);
-    println!("CHR-ROM manf ID: 0x{:x}", rv);
-
-    let rv = nes::ppu_rd(&device_handle, 0x0001);
-    println!("CHR-ROM prod ID: 0x{:x}", rv);
-    // EXIT
-    nes::ppu_wr(&device_handle, 0x0000, 0xF0);
-}
-
-#[derive(Eq, PartialEq)]
-enum Mirroring {
-    VERT,
-    HORZ,
-    SCNA,
-    SCNB,
-}
-
-fn detect_mapper_mirroring<T: UsbContext>(device_handle: &DeviceHandle<T>) -> Result<Mirroring, String> {
-    // TODO: call mmc3 detection function
-    // TODO: call mmc1 detection function
-    // TODO: fme7 and other ASIC mappers
-
-    // PINPORT ADDR_SET, 0x0800
-    //   1       17      0x0800
-    println!("PINPORT_ADDR_SET 0x0800");
-    pinport::addr_set(&device_handle, 0x0800);
-    // readH = PINPORT CTL_RD, CIA10         RL=4 (err_code, data_len, LSB, MSB)
-    //           1       6       11
-    let read_h = pinport::ctl_rd(&device_handle, 11).unwrap();
-    println!("Read h: {}", read_h);
-
-    // PINPORT ADDR_SET, 0x0400
-    println!("PINPORT_ADDR_SET 0x0400");
-    pinport::addr_set(&device_handle, 0x0400);
-    // readH = PINPORT CTL_RD, CIA10         RL=4 (err_code, data_len, LSB, MSB)
-    //           1       6       11
-    let read_v = pinport::ctl_rd(&device_handle, 11).unwrap();
-
-    if read_v == 0 && read_h == 0 {
-        println!("1SCNA - 1screen A mirroring");
-        return Ok(Mirroring::SCNA);
-    } else if read_v != 0 && read_h == 0 {
-        println!("VERT - Vertical mirroring");
-        return Ok(Mirroring::VERT);
-    } else if read_v == 0 && read_h != 0 {
-        println!("HORZ - Horizontal mirroring");
-        return Ok(Mirroring::HORZ);
-    } else {
-        println!("1SCNB - 1screen B mirroring");
-        return Ok(Mirroring::SCNB);
-    };
-}
 
 fn get_device_handle<T: UsbContext>(context: &T) -> Option<DeviceHandle<T>> {
     println!("Checking");

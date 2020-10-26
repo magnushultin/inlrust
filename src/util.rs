@@ -55,3 +55,83 @@ pub fn read_device_no_check<T: UsbContext>(
         .read_control(request_type, request, value, index, &mut buf, timeout)
         .unwrap();
 }
+
+// Command line options
+#[derive(Debug)]
+pub struct CommandLineOptions {
+    pub console: String,
+    pub filename: String,
+    pub mapper: String,
+    pub prg_size: u16, // x
+    pub chr_size: u16  // y
+}
+
+pub fn help() {
+    println!("
+Usage: program [options]
+
+Options/Flags:
+  --help, -h                                    Displays this message.
+  -c console                                    Console port, (GBA,GENESIS,N64,NES)
+  -d filename                                   Dump cartridge ROMs to this filename
+  -a filename                                   If provided, write ram to this filename
+  -m mapper                                     NES:    (action53,bnrom,cdream,cninja,cnrom,dualport,easynsf,fme7,
+                                                         mapper30,mmc1,mmc3,mmc4,mmc5,nrom,unrom)
+  -x size_kbytes                                NES-only, size of PRG-ROM in kilobytes
+  -y size_kbytes                                NES-only, size of CHR-ROM in kilobytes
+  -w size_kbytes                                NES-only, size of WRAM in kilobytes
+")
+}
+
+pub fn parse_command_line(args: &[String]) -> Result<CommandLineOptions, String> {
+    if args.len() < 2 {
+        return Err(String::from("Not enough arguments."))
+    }
+    let mut console = "".to_owned();
+    let mut filename = "".to_owned();
+    let mut mapper = "".to_owned();
+    let mut prg_size = 0;
+    let mut chr_size = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" => return Err(String::from("")),
+            "-c" =>  {
+                console = args[i+1].clone();
+                i += 1;
+            },
+            "-d" =>  {
+                filename = args[i+1].clone();
+                i += 1;
+            },
+            "-m" =>  {
+                mapper = args[i+1].clone();
+                i += 1;
+            },
+            "-x" =>  {
+                prg_size = parse_number(&args[i+1])?;
+                i += 1;
+            },
+            "-y" =>  {
+                chr_size = parse_number(&args[i+1])?;
+                i += 1;
+            },
+            _ => (),
+        }
+        i += 1;
+    }
+
+    return Ok(CommandLineOptions { console, filename , mapper, prg_size, chr_size})
+}
+
+fn parse_number(argument: &String) -> Result<u16, String> {
+    let input_opt = argument.clone().parse::<u16>();
+    let size = match input_opt {
+        Ok(size) => size,
+        Err(e) => {
+            return Err(format!("While parsing \"{}\" got err: {}", argument, e));
+        }
+    };
+    return Ok(size);
+}
