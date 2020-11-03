@@ -5,6 +5,7 @@ mod bootload;
 mod buffer;
 mod io;
 mod nes;
+mod snes;
 mod operation;
 mod pinport;
 mod opcodes;
@@ -42,6 +43,9 @@ fn main() {
     
     if cmd_options.console.to_lowercase() == "nes" {
         nes::dump_rom(&device_handle, &cmd_options);
+    }
+    else if cmd_options.console.to_lowercase() == "snes" {
+        snes::dump_rom(&device_handle, &cmd_options);
     } else {
         println!("Console {} is not supported!", cmd_options.console);
     }

@@ -19,6 +19,9 @@ pub const DISABLE_STM_DEBUG: u16 = 0x10;
 //disable NES cart memories
 pub const NES_INIT: u16 = 1;
 
+
+pub const SNES_INIT: u16 = 2;
+
 //SWIM protocol init
 //"single wire interface module"
 //different INL boards have this signal on different pins
