@@ -11,7 +11,7 @@ use crate::util;
 use crate::util::CommandLineOptions;
 use crate::opcodes::nes::*;
 use crate::opcodes::buffer as op_buffer;
-use crate::nes_mappers::{nrom, mmc1, unrom, cnrom};
+use crate::nes_mappers::{nrom, mmc1, unrom, cnrom, mmc3};
 
 pub fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions) {
     println!("IO_RESET");
@@ -74,6 +74,19 @@ pub fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Co
         create_header(&mut f, cmd_options.prg_size, cmd_options.chr_size, 3, mirroring);
         cnrom::dump_prgrom(&device_handle, &mut f, cmd_options.prg_size);
         cnrom::dump_chrrom(&device_handle, &mut f, cmd_options.chr_size);
+
+        f.flush().unwrap();
+    } else if cmd_options.mapper.to_lowercase() == "mmc3" {
+        mmc3::test_mmc3(&device_handle);
+
+        let file = File::create(&cmd_options.filename).unwrap();
+        let mut f = BufWriter::new(file);
+
+        mmc3::init_mapper(&device_handle);
+        let mirroring = detect_mapper_mirroring(&device_handle).unwrap();
+        create_header(&mut f, cmd_options.prg_size, cmd_options.chr_size, 4, mirroring);
+        mmc3::dump_prgrom(&device_handle, &mut f, cmd_options.prg_size);
+        mmc3::dump_chrrom(&device_handle, &mut f, cmd_options.chr_size);
 
         f.flush().unwrap();
     } else {
