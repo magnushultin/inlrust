@@ -11,3 +11,8 @@ Cargo.lock
 
 # Ignore any roms
 *.nes
+*.sfc
+*.smc
+
+# Ignore swapfile
+*.swp

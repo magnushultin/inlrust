@@ -1,18 +1,18 @@
 use rusb::{DeviceHandle, UsbContext};
-use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
 
 use crate::io;
 use crate::operation;
 use crate::buffer;
-use crate::nes::{discrete_exp0_prgrom_wr, detect_mapper_mirroring, cpu_rd, cpu_wr, dump, ppu_ram_sense, buffer_allocate};
+use crate::util::{dump, buffer_allocate};
+use crate::nes::{discrete_exp0_prgrom_wr, detect_mapper_mirroring, cpu_rd, cpu_wr, ppu_ram_sense};
 use crate::opcodes::buffer as op_buffer;
 
 pub fn test_unrom<T: UsbContext>(device_handle: &DeviceHandle<T>) {
     println!("Testing UNROM");
     println!("Detect mapper mirroring");
-    detect_mapper_mirroring(&device_handle);
+    detect_mapper_mirroring(&device_handle).unwrap();
 
     ppu_ram_sense(&device_handle, 0x1000);
     println!("EXP0 pull-up test: {}", io::exp0_pullup_test(&device_handle));
@@ -37,11 +37,11 @@ pub fn test_unrom<T: UsbContext>(device_handle: &DeviceHandle<T>) {
 
 pub fn find_banktable<T: UsbContext>(device_handle: &DeviceHandle<T>, banktable_size: u8) -> u16 {
     let search_base = 0x0C; // search in $C000-$F000, the fixed bank
-    const KB_search_space: u16 = 16;
-    let mut full_dump: [u8; 128 * (KB_search_space as usize * 1024 / 128)] = [0; 128 * (KB_search_space as usize * 1024 / 128)];
+    const KB_SEARCH_SPACE: u16 = 16;
+    let mut full_dump: [u8; 128 * (KB_SEARCH_SPACE as usize * 1024 / 128)] = [0; 128 * (KB_SEARCH_SPACE as usize * 1024 / 128)];
 
 
-    let size_kb: u16 = KB_search_space;
+    let size_kb: u16 = KB_SEARCH_SPACE;
     let map: u16 = search_base;
     let mem: u16 = op_buffer::NESCPU_4KB;
     let buff0 = 0;
@@ -68,6 +68,9 @@ pub fn find_banktable<T: UsbContext>(device_handle: &DeviceHandle<T>, banktable_
             // DUMPED = 0xD8
             if buff_status == 0xD8 {
                 break;
+            }
+            if try_nbr == 19 {
+                println!("Did not get buff_status within 20 tries");
             }
         }
         if buff_status != 0xD8 {
@@ -115,7 +118,7 @@ pub fn dump_prgrom_unrom<T: UsbContext, W: Write>(
     rom_size_kb: u16,
     banktable_base: u16
 ) {
-    let mut kb_per_read = 16;
+    let kb_per_read = 16;
     let num_reads = rom_size_kb / kb_per_read;
     let mut read_count = 0;
     let addr_base = 0x08;

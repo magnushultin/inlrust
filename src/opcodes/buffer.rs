@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(non_upper_case_globals)]
 //raw buffer banks & size
 //This determines the raw buffer sram space on avr at firmware compile time
 //one byte per bank is instantiated to keep track of that banks' allocation status

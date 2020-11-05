@@ -1,16 +1,16 @@
 use rusb::{DeviceHandle, UsbContext};
-use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
 
 use crate::io;
-use crate::nes::{discrete_exp0_prgrom_wr, detect_mapper_mirroring, ppu_wr, ppu_rd, cpu_rd, cpu_wr, dump};
+use crate::util::dump;
+use crate::nes::{discrete_exp0_prgrom_wr, detect_mapper_mirroring, ppu_wr, ppu_rd, cpu_rd, cpu_wr};
 use crate::opcodes::buffer as op_buffer;
 
 pub fn test_cnrom<T: UsbContext>(device_handle: &DeviceHandle<T>) {
     println!("Testing CNROM");
     println!("Detect mapper mirroring");
-    detect_mapper_mirroring(&device_handle);
+    detect_mapper_mirroring(&device_handle).unwrap();
     //    IO EXP0_PULLUP_TEST
     io::exp0_pullup_test(&device_handle);
     //    read PRG-ROM manf ID

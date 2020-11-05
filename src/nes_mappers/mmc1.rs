@@ -1,10 +1,10 @@
 use rusb::{DeviceHandle, UsbContext};
-use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
 
 use crate::io;
-use crate::nes::{detect_mapper_mirroring, ppu_wr, ppu_rd, cpu_rd, cpu_wr, mmc1_wr, dump, Mirroring, ppu_ram_sense};
+use crate::util::dump;
+use crate::nes::{detect_mapper_mirroring, ppu_wr, ppu_rd, cpu_rd, cpu_wr, mmc1_wr, Mirroring, ppu_ram_sense};
 use crate::opcodes::buffer as op_buffer;
 
 pub fn test_mmc1<T: UsbContext>(device_handle: &DeviceHandle<T>) {
@@ -80,11 +80,11 @@ pub fn dump_prgrom_mmc1<T: UsbContext, W: Write>(
     file: &mut BufWriter<W>,
     rom_size_kb: u16,
 ) {
-    let mut kb_per_read = 32;
+    let kb_per_read = 32;
     let num_reads = rom_size_kb / kb_per_read;
     let mut read_count = 0;
     let addr_base = 0x08;
-    // NESCPU_4KB = 0x20
+
     while read_count < num_reads {
         mmc1_wr(&device_handle, 0xE000, read_count<<1);
         dump(&device_handle, file, kb_per_read, addr_base, op_buffer::NESCPU_4KB);

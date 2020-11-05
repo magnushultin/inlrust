@@ -19,12 +19,6 @@ const INL_MANUFACTURER: &str = "InfiniteNesLives.com";
 const INL_PRODUCT: &str = "INL Retro-Prog";
 const MIN_MAJOR_FW_VERSION: u8 = 2;
 
-const MAX_VUSB: usize = 254;
-
-const RETURN_ERR_IDX: usize = 0;
-const RETURN_LEN_IDX: usize = 1;
-
-
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -42,10 +36,10 @@ fn main() {
     bootload::get_app_ver(&device_handle);
     
     if cmd_options.console.to_lowercase() == "nes" {
-        nes::dump_rom(&device_handle, &cmd_options);
+        nes::dump_nes(&device_handle, &cmd_options);
     }
     else if cmd_options.console.to_lowercase() == "snes" {
-        snes::dump_rom(&device_handle, &cmd_options);
+        snes::dump_snes(&device_handle, &cmd_options);
     } else {
         println!("Console {} is not supported!", cmd_options.console);
     }
