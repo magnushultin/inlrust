@@ -10,9 +10,7 @@ use crate::opcodes::snes::*;
 use crate::opcodes::buffer as op_buffer;
 
 pub fn dump_snes<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions) {
-    println!("IO_RESET");
     io::reset(&device_handle);
-    println!("SNES_INIT");
     io::snes_init(&device_handle);
 
     let header = dump_snes_header(&device_handle).unwrap();
@@ -37,13 +35,13 @@ pub fn dump_snes<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &C
     // detect sram size
     let mut ram_size = 0;
     if header.sram_size < 7 {
-        ram_size = 2_u8.pow(header.sram_size.into());
+        ram_size = 2_u16.pow(header.sram_size.into());
     }
     println!("ram_size: {} kilobytes", ram_size);
 
     let mut exp_ram_size = 0;
     if header.exp_ram_size < 7 {
-        exp_ram_size = 2_u8.pow(header.exp_ram_size.into());
+        exp_ram_size = 2_u16.pow(header.exp_ram_size.into());
     }
     println!("exp_ram_size: {} kilobytes", exp_ram_size);
     if ram_size == 0 && exp_ram_size  > 0 {
@@ -56,15 +54,28 @@ pub fn dump_snes<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &C
     let rom_size = match_rom_size_kb(header.rom_size).expect(&test_string);
     println!("rom_size: {} kilobytes", rom_size);
 
-    println!("Dumping SNES ROM...");
+    println!("{:?}", cmd_options);
+    if cmd_options.savefile != "" {
+        println!("Dumping SAVE RAM...");
 
-    dump_rom(&device_handle, &cmd_options, rombank, rom_size, snes_mapping);
+        println!("rambank {}", rambank);
+        println!("ram_size {}", ram_size);
+        println!("snes_mapping {}", snes_mapping);
+        dump_ram(&device_handle, &cmd_options, rambank, ram_size, snes_mapping);
+    }
+
+    if cmd_options.filename != "" {
+        println!("Dumping SNES ROM...");
+
+        dump_rom(&device_handle, &cmd_options, rombank, rom_size, snes_mapping);
+    }
+
 
 
 }
 
 fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions,
-    rombank: u16, rom_size: u16, snes_mapping: &str) {
+    start_bank: u16, rom_size: u16, snes_mapping: &str) {
 
 	let kb_per_bank;
 	let addr_base;
@@ -88,16 +99,63 @@ fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Comman
 
 	while read_count < num_reads {
 
-            println!("dump ROM part {} of {}", read_count, num_reads);
-
             if read_count % 8 == 0 {
                 println!("dumping ROM bank: {} of {}", read_count, num_reads-1);
             }
             // select desired bank
-            set_bank(&device_handle, rombank + read_count);
+            set_bank(&device_handle, start_bank + read_count);
 
             dump(&device_handle, &mut f, kb_per_bank, addr_base, op_buffer::SNESROM_PAGE);
 
+            read_count +=  1
+        }
+
+        f.flush().unwrap();
+}
+
+fn dump_ram<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions,
+    start_bank: u16, ram_size: u16, snes_mapping: &str) {
+
+	let mut kb_per_bank;
+	let addr_base;
+
+        if snes_mapping == "HiROM" {
+            kb_per_bank = 8; // 8KB per bank
+            addr_base = 0x60;
+        } else if snes_mapping == "LoROM" {
+            kb_per_bank = 32;
+            addr_base = 0x00;
+        } else {
+            println!("Unsupported mapping: {}", snes_mapping);
+            return;
+        }
+
+        let file = File::create(&cmd_options.savefile).unwrap();
+        let mut f = BufWriter::new(file);
+
+        let num_banks;
+        if ram_size < kb_per_bank {
+            num_banks = 1;
+            kb_per_bank = ram_size;
+        } else {
+            num_banks = ram_size / kb_per_bank;
+        }
+
+	let mut read_count = 0;
+	while read_count < num_banks {
+
+            println!("dump RAM part {} of {}", read_count, num_banks);
+
+            // select desired bank
+            println!("set bank start_bank: {} read_count: {}", start_bank, read_count);
+            set_bank(&device_handle, start_bank + read_count);
+
+            if snes_mapping == "LoROM" {
+                println!("LoROM, kb_per_bank: {} , addr_base: {}", kb_per_bank, addr_base);
+                dump(&device_handle, &mut f, kb_per_bank, addr_base, op_buffer::SNESROM_PAGE);
+            } else {
+                dump(&device_handle, &mut f, kb_per_bank, addr_base, op_buffer::SNESSYS_PAGE);
+            }
             read_count +=  1
         }
 

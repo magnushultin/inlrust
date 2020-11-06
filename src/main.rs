@@ -44,7 +44,6 @@ fn main() {
         println!("Console {} is not supported!", cmd_options.console);
     }
 
-    println!("IO_RESET");
     io::reset(&device_handle);
 }
 

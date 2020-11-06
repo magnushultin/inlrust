@@ -18,64 +18,26 @@ pub fn dump<T: UsbContext, W: Write>(
     map: u16,
     mem: u16,
 ) {
-    //local buff0 = 0
     let buff0 = 0;
-    //local buff1 = 1
     let buff1 = 1;
-    //local cur_buff_status = 0
-    // let curr_buff_status = 0;
-    //local data = nil --lua stores data in strings
-    //
-    //if debug then print("dumping cart") end
-    println!("Dumping cart");
 
-    //dict.operation("SET_OPERATION", op_buffer["RESET"] )
-    // shared_dict_buffer #define RESET		0x01
-    // TODO: Change buffer/operation operands to enum
-    println!("SET_OPERATION RESET");
     operation::set_operation(&device_handle, 0x01);
 
-    //--reset buffers first
-    //dict.buffer("RAW_BUFFER_RESET")
-    println!("RAW_BUFFER_RESET");
     buffer::raw_buffer_reset(&device_handle);
-    //local data = nil --lua stores data in strings
-    //
-    //if debug then print("dumping cart") end
-    println!("Dumping cart");
 
-    //--need to allocate some buffers for dumping
-    //--2x 128Byte buffers
-    //local num_buffers = 2
-    //local buff_size = 128
-    //if debug then print("allocating buffers") end
-    //assert(buffers.allocate( num_buffers, buff_size ), "fail to allocate buffers")
     buffer_allocate(&device_handle, 2, 128);
-    // op_buffer[mem] (op_buffer["NESCPU_4KB"]) = 0x20
-    // NROM = mapper 0
-    // op_buffer[NOVAR] = 0
-    // op_buffer["MASKROM"] = 0xDD
 
-    // if debug then print("setting map n part") end
-    // dict.buffer("SET_MEM_N_PART", (op_buffer[mem]<<8 | op_buffer["MASKROM"]), buff0 )
-    // dict.buffer("SET_MEM_N_PART", (op_buffer[mem]<<8 | op_buffer["MASKROM"]), buff1 )
     buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff0);
     buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff1);
 
-    // dict.buffer("SET_MAP_N_MAPVAR", (mapper<<8 | op_buffer["NOVAR"]), buff0 )
-    // address base = 0x08  -- $8000
     buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff0);
     buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff1);
 
-    // op_buffer[STARTDUMP] = 0xD2
-    println!("SET_OPERATION STARTDUMP");
     operation::set_operation(&device_handle, 0xD2);
 
-    // for i=1, (sizeKB*1024/buff_size)
     let mut buf: [u8; 128] = [0; 128];
     let mut buff_status = 0;
-    println!("sizeKB*1024/buff_size={}", size_kb * 1024 / 128);
-    for _ in 0..(size_kb * 1024 / 128) {
+    for _ in 0..((size_kb as u32) * 1024 / 128) {
         for try_nbr in 0..20 {
             buff_status = buffer::get_cur_buff_status(&device_handle);
             // DUMPED = 0xD8
@@ -97,11 +59,7 @@ pub fn dump<T: UsbContext, W: Write>(
         file.write_all(&buf).unwrap();
     }
 
-    println!("DUMPING DONE!");
-
-    println!("SET_OPERATION RESET");
     operation::set_operation(&device_handle, 0x01);
-    println!("RAW_BUFFER_RESET");
     buffer::raw_buffer_reset(&device_handle);
 }
 
@@ -147,13 +105,9 @@ pub fn buffer_allocate<T: UsbContext>(
     } else {
         println!("ERROR! Not setup to handle this buffer config");
     }
-    println!("Buffer allocate buffer0");
     buffer::allocate_buffer0(&device_handle, (buff0id << 8) | buff0basebank, numbanks);
-    println!("Buffer allocate buffer1");
     buffer::allocate_buffer1(&device_handle, (buff1id << 8) | buff1basebank, numbanks);
-    println!("Buffer set reload pagenum0");
     buffer::set_reload_pagenum0(&device_handle, buff0_firstpage, reload);
-    println!("Buffer set reload pagenum1");
     buffer::set_reload_pagenum1(&device_handle, buff1_firstpage, reload);
 }
 
@@ -213,6 +167,7 @@ pub fn read_device_no_check<T: UsbContext>(
 pub struct CommandLineOptions {
     pub console: String,
     pub filename: String,
+    pub savefile: String,
     pub mapper: String,
     pub prg_size: u16, // x
     pub chr_size: u16  // y
@@ -241,6 +196,7 @@ pub fn parse_command_line(args: &[String]) -> Result<CommandLineOptions, String>
     }
     let mut console = "".to_owned();
     let mut filename = "".to_owned();
+    let mut savefile = "".to_owned();
     let mut mapper = "".to_owned();
     let mut prg_size = 0;
     let mut chr_size = 0;
@@ -255,6 +211,10 @@ pub fn parse_command_line(args: &[String]) -> Result<CommandLineOptions, String>
             },
             "-d" =>  {
                 filename = args[i+1].clone();
+                i += 1;
+            },
+            "-a" =>  {
+                savefile = args[i+1].clone();
                 i += 1;
             },
             "-m" =>  {
@@ -274,7 +234,7 @@ pub fn parse_command_line(args: &[String]) -> Result<CommandLineOptions, String>
         i += 1;
     }
 
-    return Ok(CommandLineOptions { console, filename , mapper, prg_size, chr_size})
+    return Ok(CommandLineOptions { console, filename , savefile, mapper, prg_size, chr_size})
 }
 
 fn parse_number(argument: &String) -> Result<u16, String> {
