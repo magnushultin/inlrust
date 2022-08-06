@@ -212,7 +212,11 @@ fn is_valid_header(header: &SnesHeader) -> bool {
 fn dump_snes_header<T: UsbContext>(device_handle: &DeviceHandle<T>) -> Result<SnesHeader, &'static str> {
     let hirom_header = get_header(&device_handle, 0x0000);
     let lorom_header = get_header(&device_handle, 0x8000);
-    if is_valid_header(&hirom_header) {
+    let exhirom_header = get_header(&device_handle, -0x400000);
+    if is_valid_header(&exhirom_header) {
+        println!("Valid header found at exHiROM address.");
+        return Ok(exhirom_header);
+    } else if is_valid_header(&hirom_header) {
         println!("Valid header found at HiROM address.");
         return Ok(hirom_header);
     } else if is_valid_header(&lorom_header) {
@@ -240,22 +244,20 @@ pub struct SnesHeader {
 }
 use std::str;
 
-fn get_header<T: UsbContext>(device_handle: &DeviceHandle<T>, map_adjust: u16) -> SnesHeader {
-    let addr_expansion_ram_size = 0xFFBD - map_adjust; //     -- 1 byte
+fn get_header<T: UsbContext>(device_handle: &DeviceHandle<T>, map_adjust: i32) -> SnesHeader {
+    let addr_expansion_ram_size = (0xFFBD - map_adjust) as u16; //     -- 1 byte
 
     // ROM Specification Addresses (32 bytes)
-    let addr_rom_name = 0xFFC0 - map_adjust; //               -- 21 bytes
-    println!("addr_rom_name: {:X}", addr_rom_name);
-    let addr_map_mode = 0xFFD5 - map_adjust; //               -- 1 byte
-    let addr_rom_type = 0xFFD6 - map_adjust; //               -- 1 byte
-    let addr_rom_size = 0xFFD7 - map_adjust; //               -- 1 byte
-    let addr_sram_size = 0xFFD8 - map_adjust; //              -- 1 byte
-    let addr_destination_code = 0xFFD9 - map_adjust; //       -- 1 byte
-    println!("addr_destination_code: {:X}", addr_destination_code);
-    let addr_developer_code = 0xFFDA - map_adjust; //         -- 1 byte (This is actually manufacturer ID)
-    let addr_version = 0xFFDB - map_adjust; //                -- 1 byte
-    let addr_compliment_check = 0xFFDC - map_adjust; //       -- 2 bytes
-    let addr_checksum = 0xFFDD - map_adjust; //               -- 2 bytes
+    let addr_rom_name         = (0xFFC0 - map_adjust) as u16; //               -- 21 bytes
+    let addr_map_mode         = (0xFFD5 - map_adjust) as u16; //               -- 1 byte
+    let addr_rom_type         = (0xFFD6 - map_adjust) as u16; //               -- 1 byte
+    let addr_rom_size         = (0xFFD7 - map_adjust) as u16; //               -- 1 byte
+    let addr_sram_size        = (0xFFD8 - map_adjust) as u16; //              -- 1 byte
+    let addr_destination_code = (0xFFD9 - map_adjust) as u16; //       -- 1 byte
+    let addr_developer_code   = (0xFFDA - map_adjust) as u16; //         -- 1 byte (This is actually manufacturer ID)
+    let addr_version          = (0xFFDB - map_adjust) as u16; //                -- 1 byte
+    let addr_compliment_check = (0xFFDC - map_adjust) as u16; //       -- 2 bytes
+    let addr_checksum         = (0xFFDD - map_adjust) as u16; //               -- 2 bytes
 
     let map_mode = rom_rd(&device_handle, addr_map_mode);
     let rom_type = rom_rd(&device_handle, addr_rom_type);
@@ -283,8 +285,6 @@ fn get_header<T: UsbContext>(device_handle: &DeviceHandle<T>, map_adjust: u16) -
     let upper: u16 = (rom_rd(&device_handle, addr_checksum) as u16) << 8;
     let lower: u16 = rom_rd(&device_handle, addr_checksum + 1) as u16;
     let checksum = lower | upper;
-
-
 
     // mapping = mapping,
     // rom_name = string_from_bytes(addr_rom_name, 21),
@@ -520,7 +520,9 @@ fn match_hardware_type(rom_type: u8) -> Option<&'static str> {
         0x23 => Some("ROM and OBC1"),
         0x33 => Some("ROM and SA-1"),
         0x43 => Some("ROM and S-DD1"),
+        0x45 => Some("ROM and S-DD1 and Save RAM"),
         0xF3 => Some("ROM and CX4"),
+        0xF9 => Some("ROM and SPC7110 and RTC and Save RAM"),
         _ => None
     }
 }
