@@ -11,6 +11,70 @@ const RETURN_ERR_IDX: usize = 0;
 const RED_START: &str = "\x1b[0;31m";
 const COLOR_END: &str = "\x1b[0m";
 
+pub fn dump_to_array<T: UsbContext>(
+    device_handle: &DeviceHandle<T>,
+    dump_array: &mut Vec<u8>,
+    size_kb: u16,
+    map: u16,
+    mem: u16,
+) {
+    let buff0 = 0;
+    let buff1 = 1;
+
+    operation::set_operation(&device_handle, 0x01);
+
+    buffer::raw_buffer_reset(&device_handle);
+
+    buffer_allocate(&device_handle, 2, 128);
+
+    buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff0);
+    buffer::set_mem_n_part(&device_handle, (mem << 8) | 0xDD, buff1);
+
+    buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff0);
+    buffer::set_map_n_mapvar(&device_handle, (map << 8) | 0, buff1);
+
+    operation::set_operation(&device_handle, 0xD2);
+
+    let mut buf: [u8; 128] = [0; 128];
+    let mut buff_status = 0;
+
+    for i in 0..((size_kb as usize) * 1024 / 128) {
+        for try_nbr in 0..20 {
+            buff_status = buffer::get_cur_buff_status(&device_handle);
+            // DUMPED = 0xD8
+            if buff_status == 0xD8 {
+                break;
+            }
+            if try_nbr == 19 {
+                println!("Did not get buff_status within 20 tries");
+            }
+        }
+        if buff_status != 0xD8 {
+            println!("DID NOT GET BUFF STATUS");
+            println!("STOPPING!");
+            break;
+        }
+   
+        buffer::buff_payload(&device_handle, &mut buf);
+
+        // Save buffer into larger array
+        dump_array[i*128..(i+1)*128].clone_from_slice(&buf);
+        // Save first buffer to compare later
+        //if i == 0 {
+        //    compare_buf = buf.clone();
+        //}
+        //println!("size_kb = {}", size_kb);
+        // TODO: remove
+        // Compare buffer after xxx bytes
+        // 30 0000 same as 20 0000 for 24 Mb (e.g. secret of evermore)
+
+        //file.write_all(&buf).unwrap();
+    }
+
+    operation::set_operation(&device_handle, 0x01);
+    buffer::raw_buffer_reset(&device_handle);
+}
+
 pub fn dump<T: UsbContext, W: Write>(
     device_handle: &DeviceHandle<T>,
     file: &mut BufWriter<W>,
@@ -53,7 +117,7 @@ pub fn dump<T: UsbContext, W: Write>(
             println!("STOPPING!");
             break;
         }
-
+   
         buffer::buff_payload(&device_handle, &mut buf);
 
         file.write_all(&buf).unwrap();

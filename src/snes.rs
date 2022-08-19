@@ -5,7 +5,7 @@ use std::io::BufWriter;
 
 use crate::io;
 use crate::util;
-use crate::util::{CommandLineOptions, dump};
+use crate::util::{CommandLineOptions, dump_to_array, dump};
 use crate::opcodes::snes::*;
 use crate::opcodes::buffer as op_buffer;
 
@@ -74,6 +74,7 @@ pub fn dump_snes<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &C
 
 }
 
+
 fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions,
     start_bank: u16, rom_size: u16, snes_mapping: &str) {
 
@@ -81,36 +82,52 @@ fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Comman
 	let addr_base;
 
         if snes_mapping == "HiROM" {
-            kb_per_bank = 64; // 64KB per bank
-            addr_base = 0x00;
-        } else if snes_mapping == "LoROM" {
-            kb_per_bank = 32;
-            addr_base = 0x80;
-        } else {
-            println!("Unsupported mapping: {}", snes_mapping);
-            return;
-        }
+        kb_per_bank = 64; // 64KB per bank
+        addr_base = 0x00;
+    } else if snes_mapping == "LoROM" {
+        kb_per_bank = 32;
+        addr_base = 0x80;
+    } else {
+        println!("Unsupported mapping: {}", snes_mapping);
+        return;
+    }
 
-        let file = File::create(&cmd_options.filename).unwrap();
-        let mut f = BufWriter::new(file);
+    let file = File::create(&cmd_options.filename).unwrap();
+    let mut f = BufWriter::new(file);
 
 	let num_reads = rom_size / kb_per_bank;
 	let mut read_count = 0;
+    let mut copy_array = vec![0; (kb_per_bank as usize) * 1024];
 
 	while read_count < num_reads {
 
-            if read_count % 8 == 0 {
-                println!("dumping ROM bank: {} of {}", read_count, num_reads-1);
+        if read_count % 8 == 0 {
+            println!("dumping ROM bank: {} of {}", read_count, num_reads-1);
+        }
+        // select desired bank
+        set_bank(&device_handle, start_bank + read_count);
+        let mut dump_array = vec![0; (kb_per_bank as usize) * 1024];
+
+        dump_to_array(&device_handle, &mut dump_array, kb_per_bank, addr_base, op_buffer::SNESROM_PAGE);
+        //println!("{:?}", dump_array);
+        read_count +=  1;
+
+        // Auto size detection
+        // TODO: Only works for hirom 24Mb right now
+        if read_count == 33 && snes_mapping == "HiROM" { // 20_0000 for hirom
+            copy_array = dump_array.clone();
+        } else if read_count == 49 && snes_mapping == "HiROM" { // 30_0000 for hirom
+            println!("{:X?}\n", &copy_array[..24]);
+            println!("{:X?}", &dump_array[..24]);
+            if copy_array == dump_array { // Repeating bank so we don't need to fetch more.
+                break;
             }
-            // select desired bank
-            set_bank(&device_handle, start_bank + read_count);
-
-            dump(&device_handle, &mut f, kb_per_bank, addr_base, op_buffer::SNESROM_PAGE);
-
-            read_count +=  1
         }
 
-        f.flush().unwrap();
+        f.write_all(&dump_array).unwrap();
+    }
+
+    f.flush().unwrap();
 }
 
 fn dump_ram<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions,
