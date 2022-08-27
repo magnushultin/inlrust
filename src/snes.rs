@@ -21,7 +21,7 @@ pub fn dump_snes<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &C
 
     let rombank;
     let rambank;
-    if snes_mapping == "HiROM" {
+    if snes_mapping == "HiROM" || snes_mapping == "HiROM + SPC7110" {
         rombank = 0xC0;
         rambank = 0x30;
     } else if snes_mapping == "LoROM" {
@@ -74,14 +74,13 @@ pub fn dump_snes<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &C
 
 }
 
-
 fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions,
     start_bank: u16, rom_size: u16, snes_mapping: &str) {
 
 	let kb_per_bank;
 	let addr_base;
 
-        if snes_mapping == "HiROM" {
+    if snes_mapping == "HiROM" || snes_mapping == "HiROM + SPC7110" {
         kb_per_bank = 64; // 64KB per bank
         addr_base = 0x00;
     } else if snes_mapping == "LoROM" {
@@ -97,10 +96,9 @@ fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Comman
 
 	let num_reads = rom_size / kb_per_bank;
 	let mut read_count = 0;
-    let mut copy_array = vec![0; (kb_per_bank as usize) * 1024];
+    let mut size_detection = vec![0; (kb_per_bank as usize) * 1024];
 
 	while read_count < num_reads {
-
         if read_count % 8 == 0 {
             println!("dumping ROM bank: {} of {}", read_count, num_reads-1);
         }
@@ -109,24 +107,27 @@ fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Comman
         let mut dump_array = vec![0; (kb_per_bank as usize) * 1024];
 
         dump_to_array(&device_handle, &mut dump_array, kb_per_bank, addr_base, op_buffer::SNESROM_PAGE);
-        //println!("{:?}", dump_array);
         read_count +=  1;
 
         // Auto size detection
-        // TODO: Only works for hirom 24Mb right now
-        if read_count == 33 && snes_mapping == "HiROM" { // 20_0000 for hirom
-            copy_array = dump_array.clone();
-        } else if read_count == 49 && snes_mapping == "HiROM" { // 30_0000 for hirom
-            println!("{:X?}\n", &copy_array[..24]);
-            println!("{:X?}", &dump_array[..24]);
-            if copy_array == dump_array { // Repeating bank so we don't need to fetch more.
-                break;
-            }
+        // TODO: Test 10Mb HiROM
+        // read_count=17 is 10_0000 for hirom
+        // read_count=21 is 14_0000 for hirom
+        // read_count=25 is 18_0000 for hirom
+        // read_count=33 is 20_0000 for hirom, 10_0000 for lorom
+        // read_count=41 is 14_0000 lorom
+        // read_count=49 is 30_0000 for hirom, 18_0000 for lorom.
+        match read_count {
+            17 | 33 => size_detection = dump_array.clone(),
+            21 | 25 | 41 | 49 => {
+                if size_detection == dump_array { // Repeating bank so we don't need to fetch more.
+                    break;
+                }
+            },
+            _ => {}
         }
-
         f.write_all(&dump_array).unwrap();
     }
-
     f.flush().unwrap();
 }
 
