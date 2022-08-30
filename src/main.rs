@@ -52,7 +52,6 @@ fn get_device_handle<T: UsbContext>(context: &T) -> Option<DeviceHandle<T>> {
     println!("Checking");
     for device in context.devices().unwrap().iter() {
         let device_desc = device.device_descriptor().unwrap();
-
         if device_desc.vendor_id() == VENDOR_ID && device_desc.product_id() == PRODUCT_ID {
             println!("Found device");
             println!(
@@ -63,15 +62,23 @@ fn get_device_handle<T: UsbContext>(context: &T) -> Option<DeviceHandle<T>> {
                 device_desc.product_id()
             );
             println!("Open device");
-            let device_handle = device.open().unwrap();
+            let device_handle = device.open().unwrap_or_else(|err| {
+                println!("{}", err);
+                process::exit(1);
+            });
+            println!("Got device handle");
+            let manufacturer = device_handle
+            .read_manufacturer_string_ascii(&device_desc)
+            .unwrap();
+            println!("Manufacturer string: {}", manufacturer);
             let product = device_handle
                 .read_product_string_ascii(&device_desc)
-                .unwrap();
+                .unwrap_or_else(|err| {
+                    println!("{}", err);
+                    process::exit(1);
+                });
             println!("Product string: {}", product);
-            let manufacturer = device_handle
-                .read_manufacturer_string_ascii(&device_desc)
-                .unwrap();
-            println!("Manufacturer string: {}", manufacturer);
+
             if manufacturer == INL_MANUFACTURER && product == INL_PRODUCT {
                 let firmware_version = device_desc.device_version();
                 if check_version(firmware_version) {

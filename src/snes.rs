@@ -70,8 +70,7 @@ pub fn dump_snes<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &C
         dump_rom(&device_handle, &cmd_options, rombank, rom_size, snes_mapping);
     }
 
-
-
+    io::reset(&device_handle);
 }
 
 fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions,
