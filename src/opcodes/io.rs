@@ -19,7 +19,6 @@ pub const DISABLE_STM_DEBUG: u16 = 0x10;
 //disable NES cart memories
 pub const NES_INIT: u16 = 1;
 
-
 pub const SNES_INIT: u16 = 2;
 
 //SWIM protocol init
@@ -44,6 +43,10 @@ pub const JTAG_INIT: u16 = 4;
 // don't define    0x00 to protect from forgetting to pass jtag lane
 pub const JTAG_ON_EXP0_3: u16 = 0x01; //Most NES carts with CPLDs EXP0-TDO, EXP1-TDI, EXP2-TMS, EXP3-TCK
 pub const JTAG_ON_SNES_CTL: u16 = 0x02; //SNES v2.0proto2 SYSCLK-TCK, RESET/EXP0-TMS, WR-TDI, RD-TDO
+
+pub const GAMEBOY_INIT: u16 = 5;
+pub const GB_POWER_5V : u16 = 9;
+pub const GB_POWER_3V : u16 = 10;
 
 //Test EXP0 drive with pull up
 //This is an important test if reling on pulling up EXP0 pin to drive the cart's pin.

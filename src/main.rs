@@ -6,6 +6,7 @@ mod buffer;
 mod io;
 mod nes;
 mod snes;
+mod gb;
 mod operation;
 mod pinport;
 mod opcodes;
@@ -40,10 +41,12 @@ fn main() {
     }
     else if cmd_options.console.to_lowercase() == "snes" {
         snes::dump_snes(&device_handle, &cmd_options);
+    }
+    else if cmd_options.console.to_lowercase() == "gb" {
+        gb::dump_gb(&device_handle, &cmd_options);
     } else {
         println!("Console {} is not supported!", cmd_options.console);
     }
-
     io::reset(&device_handle);
 }
 
