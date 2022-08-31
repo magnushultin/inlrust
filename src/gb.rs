@@ -1,11 +1,16 @@
 use rusb::{DeviceHandle, UsbContext};
 use std::str;
+use std::fs::File;
+use std::io::BufWriter;
 
 use crate::io;
 use crate::util;
-use crate::util::{CommandLineOptions};
-use crate::opcodes::gb::*;
 
+use crate::util::{CommandLineOptions, dump};
+use crate::opcodes::gb::*;
+use crate::opcodes::buffer as op_buffer;
+
+// TODO: Check header checksum and global checksum
 
 pub fn dump_gb<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions) {
     io::reset(&device_handle);
@@ -14,9 +19,85 @@ pub fn dump_gb<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Com
 
     let header = get_header(&device_handle);
     print_header(&header);
-    
+
+    if cmd_options.savefile != "" {
+        println!("Dumping save RAM...");
+        dump_ram(&device_handle, &cmd_options, &header);
+    }
+
+    if cmd_options.filename != "" {
+        println!("Dumping ROM...");
+        dump_rom(&device_handle, &cmd_options, &header);
+    }
 
     io::reset(&device_handle);
+}
+
+fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions, header: &GbHeader) {
+    let file = File::create(&cmd_options.filename).unwrap();
+    let mut f = BufWriter::new(file);
+
+    let kb_per_read = 16; // 16 MBC or 32 rom only.
+    let rom_size = 32 * (1 << header.rom_size);
+    let mut addr_base = 0x00;
+    let num_reads = rom_size / kb_per_read;
+    let mut read_count = 0;
+
+    while read_count < num_reads {
+        if read_count % 8 == 0 {
+            println!("dumping ROM bank: {} of {}", read_count, num_reads-1);
+        }
+        // TODO: Better check if MBC cart.
+        if read_count >= 1 && header.cart_type > 0 { // For MBC carts, select current bank
+            addr_base = 0x40;
+            rom_wr(&device_handle, 0x2000, read_count);
+        }
+        dump(&device_handle, &mut f, kb_per_read, addr_base, op_buffer::GAMEBOY_PAGE);
+        read_count +=  1
+    }
+}
+
+// TODO: Make sure it works.
+fn dump_ram<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions, header: &GbHeader) {
+    // MBC1, MBC3, MBC5 should work.
+    // TODO: HuC1
+
+    if header.cart_type == 0xFF { // 0xFF is HuC1 with ram
+        println!("HuC1 with ram not supported yet!");
+        return;
+    }
+
+    // Header ram size
+    let size = match_ram_size(header.ram_size).unwrap_or(0);
+    if size == 0 {
+        println!("No RAM in this cart according to header.");
+        return;
+    }
+
+    let file = File::create(&cmd_options.savefile).unwrap();
+    let mut f = BufWriter::new(file);
+
+    let kb_per_read = 8;
+    let addr_base = 0xA000;
+    let banks = size as u16 / kb_per_read;
+
+    // Enable RAM only for MBC
+    // TODO: Detect MBC better
+    if header.cart_type != 8 && header.cart_type != 9 {
+        rom_wr(&device_handle, 0x0000, 0xA);
+    }
+
+    for n in 0..banks {
+        println!("Dumping RAM bank: {} of {}", n+1, banks);
+        // Switch ram bank.
+        rom_wr(&device_handle, 0x4000, n);
+        dump(&device_handle, &mut f, kb_per_read, addr_base, op_buffer::GAMEBOY_PAGE);
+    }
+
+    // Disable RAM
+    if header.cart_type != 8 && header.cart_type != 9 {
+        rom_wr(&device_handle, 0x0000, 0x0);
+    }
 }
 
 #[derive(Debug)]
@@ -90,8 +171,8 @@ fn print_header(header: &GbHeader) {
     println!("Developer: {}", match_developer(header.developer_code).unwrap_or("Unknown"));
     println!("Super Gameboy support: {}", if header.sgb_flag == 3 {"yes"} else {"no"});
     println!("Cart Type: {}", match_cart_type(header.cart_type).unwrap_or("Unknown"));
-    println!("upper bound rom_size: {} KiB", 32 * (1 << header.rom_size)); // 32 KiB × (1 << <value>)
-    println!("ram_size: {}", match_ram_size(header.ram_size).unwrap_or("Unknown"));
+    println!("ROM size: {} KiB", 32 * (1 << header.rom_size)); // 32 KiB × (1 << <value>)
+    println!("RAM size: {} KiB", match_ram_size(header.ram_size).unwrap_or(0));
     println!("Destination: {}", if header.dest_code == 0 {"Jap (probably)"} else {"Overseas"});
     println!("Version: 0x{:X}", header.version);
     println!("Header checksum: {:X}", header.header_checksum);
@@ -99,13 +180,13 @@ fn print_header(header: &GbHeader) {
     println!("--------------------------------");
 }
 
-fn match_ram_size(ram_size: u8) -> Option<&'static str> {
+fn match_ram_size(ram_size: u8) -> Option<u8> {
     match ram_size {
-        0x00 => Some("None"),
-        0x02 => Some("8 kilobits"),
-        0x03 => Some("32 kilobits"),
-        0x04 => Some("128 kilobits"),
-        0x05 => Some("64 kilobits"),
+        0x00 => Some(0),
+        0x02 => Some(8),
+        0x03 => Some(32),
+        0x04 => Some(128),
+        0x05 => Some(64),
         _ => None
     }
 }
@@ -302,12 +383,16 @@ fn match_developer(dev_code: u8) -> Option<&'static str> {
     }
 }
 
-
 // Device functions
-
 pub fn rom_rd<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16) -> u8 {
     let request = 12; // 12 is for GB
     let mut buf: [u8; 3] = [0; 3];
     util::read_device(device_handle, &mut buf, request, GAMEBOY_RD, operand, 0);
     return buf[2];
+}
+
+pub fn rom_wr<T: UsbContext>(device_handle: &DeviceHandle<T>, operand: u16, misc: u16) {
+    let request = 12; // 12 is for GB
+    let mut buf: [u8; 1] = [0; 1];
+    util::read_device(device_handle, &mut buf, request, GAMEBOY_WR, operand, misc);
 }
