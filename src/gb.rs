@@ -50,17 +50,16 @@ fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Comman
         // TODO: Better check if MBC cart.
         if read_count >= 1 && header.cart_type > 0 { // For MBC carts, select current bank
             addr_base = 0x40;
-            rom_wr(&device_handle, 0x2000, read_count);
+            rom_wr(&device_handle, 0x2100, read_count);
         }
         dump(&device_handle, &mut f, kb_per_read, addr_base, op_buffer::GAMEBOY_PAGE);
         read_count +=  1
     }
 }
 
-// TODO: Make sure it works.
 fn dump_ram<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions, header: &GbHeader) {
     // MBC1, MBC3, MBC5 should work.
-    // TODO: HuC1
+    // TODO: HuC1, MBC2
 
     if header.cart_type == 0xFF { // 0xFF is HuC1 with ram
         println!("HuC1 with ram not supported yet!");
@@ -78,24 +77,27 @@ fn dump_ram<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &Comman
     let mut f = BufWriter::new(file);
 
     let kb_per_read = 8;
-    let addr_base = 0xA000;
+    let addr_base = 0xA0;
+    // TODO: MBC2 has 512B (0.5KiB) built in ram. dump method is just for KiB so need to fix that.
     let banks = size as u16 / kb_per_read;
 
     // Enable RAM only for MBC
     // TODO: Detect MBC better
     if header.cart_type != 8 && header.cart_type != 9 {
+        println!("Enable RAM");
         rom_wr(&device_handle, 0x0000, 0xA);
     }
 
     for n in 0..banks {
         println!("Dumping RAM bank: {} of {}", n+1, banks);
         // Switch ram bank.
-        rom_wr(&device_handle, 0x4000, n);
+        rom_wr(&device_handle, 0x4100, n);
         dump(&device_handle, &mut f, kb_per_read, addr_base, op_buffer::GAMEBOY_PAGE);
     }
 
     // Disable RAM
     if header.cart_type != 8 && header.cart_type != 9 {
+        println!("Disable RAM");
         rom_wr(&device_handle, 0x0000, 0x0);
     }
 }
