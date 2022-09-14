@@ -1,5 +1,6 @@
 pub mod nes;
 pub mod gb;
+pub mod genesis;
 pub mod snes;
 pub mod pinport;
 pub mod operation;

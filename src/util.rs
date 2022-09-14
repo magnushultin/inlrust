@@ -243,7 +243,7 @@ Usage: program [options]
 
 Options/Flags:
   --help, -h                                    Displays this message.
-  -c console                                    Console port, (NES, SNES, GB)
+  -c console                                    Console port, (NES, SNES, GB, GENESIS)
   -d filename                                   Dump cartridge ROMs to this filename
   -a filename                                   If provided, write ram to this filename
   -m mapper                                     NES:    (action53,bnrom,cdream,cninja,cnrom,dualport,easynsf,fme7,
