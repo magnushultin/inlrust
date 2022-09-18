@@ -1,17 +1,16 @@
 use rusb::{DeviceHandle, UsbContext};
+use std::io::Write;
 use std::str;
-use std::fs::File;
+use std::fs;
+use std::io::prelude::*;
 use std::io::BufWriter;
-use std::convert::TryInto;
 
 use crate::io;
 use crate::util;
 
-use crate::util::{CommandLineOptions, dump, dump_to_array};
+use crate::util::{CommandLineOptions, dump};
 use crate::opcodes::genesis::*;
 use crate::opcodes::buffer as op_buffer;
-
-// TODO: Check header checksum and global checksum
 
 pub fn dump_genesis<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions) {
     io::reset(&device_handle);
@@ -19,18 +18,82 @@ pub fn dump_genesis<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options:
 
     let header = get_header(&device_handle);
     print_header(&header);
-    /*
+
     if cmd_options.savefile != "" {
         println!("Dumping save RAM...");
         dump_ram(&device_handle, &cmd_options, &header);
     }
-
+ 
     if cmd_options.filename != "" {
         println!("Dumping ROM...");
         dump_rom(&device_handle, &cmd_options, &header);
     }
-    */
+
     io::reset(&device_handle);
+}
+
+// TODO: Detect and warn for larger roms with sram because can't disable sram with firmware.
+fn dump_rom<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions, header: &GenesisHeader) {
+    let file = fs::File::create(&cmd_options.filename).unwrap();
+    let mut f = BufWriter::new(file);
+
+    let kb_per_read = 128;
+    let rom_size = header.rom_size;
+    let addr_base = 0x0000;
+    let num_reads = rom_size / kb_per_read;
+    let mut read_count = 0;
+
+    while read_count < num_reads {
+        if read_count % 8 == 0 {
+            println!("dumping ROM bank: {} of {}", read_count, num_reads-1);
+        }
+
+        set_bank(device_handle, read_count as u16);
+        dump(&device_handle, &mut f, (kb_per_read/2) as u16, addr_base, op_buffer::GENESIS_ROM_PAGE0);
+        dump(&device_handle, &mut f, (kb_per_read/2) as u16, addr_base, op_buffer::GENESIS_ROM_PAGE1);
+        read_count +=  1
+    }
+}
+
+fn dump_ram<T: UsbContext>(device_handle: &DeviceHandle<T>, cmd_options: &CommandLineOptions, header: &GenesisHeader) {
+
+    if header.extra_memory_type != 0xF8 {
+        println!("Dumping save RAM for {} is not supported.", match_extra_memory_type(header.extra_memory_type).unwrap_or("Unknown"));
+    }
+    {
+        let file = fs::File::create(&cmd_options.savefile).unwrap();
+        let mut f = BufWriter::new(file);
+
+        let kb_per_read = 8;
+        let addr_base = 0x00;
+
+        let size = header.extra_memory_size / 2;
+        let banks = size as u16 / kb_per_read;
+        let start_bank = 0x20 >> 1;
+
+        for n in 0..banks {
+            println!("Dumping RAM bank: {} of {}", n+1, banks);
+
+            set_bank(device_handle, start_bank + (n as u16));
+            dump(&device_handle, &mut f, kb_per_read, addr_base, op_buffer::GENESIS_RAM_PAGE); // Reads the lower byte
+        }
+        f.flush().unwrap();
+    }
+
+    // Pad file with 0xff since we only got the lower byte.
+    fs::rename(&cmd_options.savefile, "tmp.srm").unwrap();
+    // Writer for file again.
+    let file = fs::File::create(&cmd_options.savefile).unwrap();
+    let mut f = BufWriter::new(file);
+    // Reader for old file.
+    let file_old = fs::File::open("tmp.srm").unwrap();
+    let mut b:  [u8; 2] = [0xFF, 0];
+    for byte in file_old.bytes() {
+        b[1] = byte.unwrap();
+        f.write(&b).unwrap();
+    }
+    fs::remove_file("tmp.srm").unwrap();
+
 }
 
 #[derive(Debug)]
@@ -98,7 +161,12 @@ fn get_header<T: UsbContext>(device_handle: &DeviceHandle<T>) -> GenesisHeader {
 
         let start = (tmp_array[4] as u32) << 24 | (tmp_array[5] as u32) << 16 | (tmp_array[6] as u32) << 8 | tmp_array[7] as u32;
         let end = (tmp_array[8] as u32) << 24 | (tmp_array[9] as u32) << 16 | (tmp_array[10] as u32) << 8 | tmp_array[11] as u32;
-        genesis_header.extra_memory_size = (end - start + 1) / 1024;
+
+        if start == 0x200001 { // ODD then +2 , low byte, base >> 1
+            genesis_header.extra_memory_size = (end - start + 2) / 1024;
+        } else if start == 0x200000 { // Even then + 1
+            genesis_header.extra_memory_size = (end - start + 1) / 2;
+        }
     }
     
     let mut tmp_array: [u8; 4] = [0; 4];
@@ -122,7 +190,7 @@ fn get_string_from_header<T: UsbContext>(device_handle: &DeviceHandle<T>, size: 
     return rom_name
 }
 
-fn get_byte_array<T: UsbContext>(device_handle: &DeviceHandle<T>, mut tmp_array: &mut [u8], addr: u16) {
+fn get_byte_array<T: UsbContext>(device_handle: &DeviceHandle<T>, tmp_array: &mut [u8], addr: u16) {
     for i in (0..tmp_array.len()).step_by(2) {
         let two = rom_rd(device_handle, (addr + i as u16) >> 1); 
         tmp_array[i] = (two & 0xFF) as u8;
