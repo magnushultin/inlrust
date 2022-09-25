@@ -7,6 +7,7 @@ mod io;
 mod nes;
 mod snes;
 mod gb;
+mod gba;
 mod genesis;
 mod operation;
 mod pinport;
@@ -45,6 +46,9 @@ fn main() {
     }
     else if cmd_options.console.to_lowercase() == "gb" {
         gb::dump_gb(&device_handle, &cmd_options);
+    }
+    else if cmd_options.console.to_lowercase() == "gba" {
+        gba::dump_gba(&device_handle, &cmd_options);
     }
     else if cmd_options.console.to_lowercase() == "genesis" {
             genesis::dump_genesis(&device_handle, &cmd_options);

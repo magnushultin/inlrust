@@ -45,6 +45,7 @@ pub const JTAG_ON_EXP0_3: u16 = 0x01; //Most NES carts with CPLDs EXP0-TDO, EXP1
 pub const JTAG_ON_SNES_CTL: u16 = 0x02; //SNES v2.0proto2 SYSCLK-TCK, RESET/EXP0-TMS, WR-TDI, RD-TDO
 
 pub const GAMEBOY_INIT: u16 = 5;
+pub const GBA_INIT: u16 = 6;
 pub const SEGA_INIT: u16 = 7;
 
 pub const GB_POWER_5V : u16 = 9;
