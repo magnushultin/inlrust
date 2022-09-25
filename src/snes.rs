@@ -262,19 +262,19 @@ pub struct SnesHeader {
 use std::str;
 
 fn get_header<T: UsbContext>(device_handle: &DeviceHandle<T>, map_adjust: i32) -> SnesHeader {
-    let addr_expansion_ram_size = (0xFFBD - map_adjust) as u16; //     -- 1 byte
+    let addr_expansion_ram_size = (0xFFBD - map_adjust) as u16; // 1 byte
 
     // ROM Specification Addresses (32 bytes)
-    let addr_rom_name         = (0xFFC0 - map_adjust) as u16; //               -- 21 bytes
-    let addr_map_mode         = (0xFFD5 - map_adjust) as u16; //               -- 1 byte
-    let addr_rom_type         = (0xFFD6 - map_adjust) as u16; //               -- 1 byte
-    let addr_rom_size         = (0xFFD7 - map_adjust) as u16; //               -- 1 byte
-    let addr_sram_size        = (0xFFD8 - map_adjust) as u16; //              -- 1 byte
-    let addr_destination_code = (0xFFD9 - map_adjust) as u16; //       -- 1 byte
-    let addr_developer_code   = (0xFFDA - map_adjust) as u16; //         -- 1 byte (This is actually manufacturer ID)
-    let addr_version          = (0xFFDB - map_adjust) as u16; //                -- 1 byte
-    let addr_compliment_check = (0xFFDC - map_adjust) as u16; //       -- 2 bytes
-    let addr_checksum         = (0xFFDD - map_adjust) as u16; //               -- 2 bytes
+    let addr_rom_name         = (0xFFC0 - map_adjust) as u16; // 21 bytes
+    let addr_map_mode         = (0xFFD5 - map_adjust) as u16; // 1 byte
+    let addr_rom_type         = (0xFFD6 - map_adjust) as u16; // 1 byte
+    let addr_rom_size         = (0xFFD7 - map_adjust) as u16; // 1 byte
+    let addr_sram_size        = (0xFFD8 - map_adjust) as u16; // 1 byte
+    let addr_destination_code = (0xFFD9 - map_adjust) as u16; // 1 byte
+    let addr_developer_code   = (0xFFDA - map_adjust) as u16; // 1 byte
+    let addr_version          = (0xFFDB - map_adjust) as u16; // 1 byte
+    let addr_compliment_check = (0xFFDC - map_adjust) as u16; // 2 bytes
+    let addr_checksum         = (0xFFDD - map_adjust) as u16; // 2 bytes
 
     let map_mode = rom_rd(&device_handle, addr_map_mode);
     let rom_type = rom_rd(&device_handle, addr_rom_type);
@@ -291,9 +291,6 @@ fn get_header<T: UsbContext>(device_handle: &DeviceHandle<T>, map_adjust: i32) -
     }
 
     let rom_name = String::from_utf8_lossy(&rom_name_array).to_string();
-    //let rom_name = str::from_utf8_unchecked(&rom_name_array).trim_end().to_string();
-    //let rom_name = str::from_utf8_unchecked(&rom_name_array).trim_end().to_string();
-    //let rom_name = str::from_utf8(&rom_name_array).expect("Invalid UTF-8 when parsing the ROM name").trim_end().to_string();
 
     let upper = (rom_rd(&device_handle, addr_compliment_check) as u16) << 8;
     let lower = rom_rd(&device_handle, addr_compliment_check + 1) as u16;
@@ -303,19 +300,6 @@ fn get_header<T: UsbContext>(device_handle: &DeviceHandle<T>, map_adjust: i32) -
     let lower: u16 = rom_rd(&device_handle, addr_checksum + 1) as u16;
     let checksum = lower | upper;
 
-    // mapping = mapping,
-    // rom_name = string_from_bytes(addr_rom_name, 21),
-    // map_mode = dict.snes("SNES_ROM_RD", addr_map_mode),
-    // rom_type = dict.snes("SNES_ROM_RD", addr_rom_type),
-    // rom_size = dict.snes("SNES_ROM_RD", addr_rom_size),
-    // sram_size = dict.snes("SNES_ROM_RD", addr_sram_size),
-    // exp_ram_size = dict.snes("SNES_ROM_RD", addr_expansion_ram_size),
-    // destination_code = dict.snes("SNES_ROM_RD", addr_destination_code),
-    // developer_code = dict.snes("SNES_ROM_RD", addr_developer_code),
-    // version = dict.snes("SNES_ROM_RD", addr_version),
-    // compliment_check = word_from_two_bytes(addr_compliment_check),
-    // checksum = word_from_two_bytes(addr_checksum)
-    //
     return SnesHeader { rom_name,
                         map_mode,
                         rom_type,

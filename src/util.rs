@@ -59,16 +59,6 @@ pub fn dump_to_array<T: UsbContext>(
 
         // Save buffer into larger array
         dump_array[i*128..(i+1)*128].clone_from_slice(&buf);
-        // Save first buffer to compare later
-        //if i == 0 {
-        //    compare_buf = buf.clone();
-        //}
-        //println!("size_kb = {}", size_kb);
-        // TODO: remove
-        // Compare buffer after xxx bytes
-        // 30 0000 same as 20 0000 for 24 Mb (e.g. secret of evermore)
-
-        //file.write_all(&buf).unwrap();
     }
 
     operation::set_operation(&device_handle, 0x01);
@@ -243,7 +233,7 @@ Usage: program [options]
 
 Options/Flags:
   --help, -h                                    Displays this message.
-  -c console                                    Console port, (NES, SNES, GB, GENESIS)
+  -c console                                    Console port, (NES, SNES, GB, GBA, GENESIS)
   -d filename                                   Dump cartridge ROMs to this filename
   -a filename                                   If provided, write ram to this filename
   -m mapper                                     NES:    (action53,bnrom,cdream,cninja,cnrom,dualport,easynsf,fme7,
