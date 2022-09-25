@@ -234,10 +234,9 @@ Usage: program [options]
 Options/Flags:
   --help, -h                                    Displays this message.
   -c console                                    Console port, (NES, SNES, GB, GBA, GENESIS)
-  -d filename                                   Dump cartridge ROMs to this filename
+  -d filename                                   Dump cartridge RAM to this filename
   -a filename                                   If provided, write ram to this filename
-  -m mapper                                     NES:    (action53,bnrom,cdream,cninja,cnrom,dualport,easynsf,fme7,
-                                                         mapper30,mmc1,mmc3,mmc4,mmc5,nrom,unrom)
+  -m mapper                                     NES: (nrom, cnrom, unrom, mmc1, mmc3)
   -x size_kbytes                                NES-only, size of PRG-ROM in kilobytes
   -y size_kbytes                                NES-only, size of CHR-ROM in kilobytes
   -w size_kbytes                                NES-only, size of WRAM in kilobytes
